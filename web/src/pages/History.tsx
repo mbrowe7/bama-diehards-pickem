@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import { PillGroup } from '../components/PillGroup';
 import type { Database } from '../types/database';
 
 type Season = Database['public']['Tables']['seasons']['Row'];
 type StandingsRow = Database['public']['Views']['standings']['Row'];
 
+function record(row: StandingsRow) {
+  return `${row.wins}-${row.losses}${row.ties ? `-${row.ties}` : ''}`;
+}
+
 export function History() {
+  const { player } = useAuth();
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [seasonId, setSeasonId] = useState<string | null>(null);
   const [rows, setRows] = useState<StandingsRow[]>([]);
@@ -33,46 +40,66 @@ export function History() {
       });
   }, [seasonId]);
 
+  const selectedSeason = seasons.find((s) => s.id === seasonId);
+
   return (
-    <div className="page">
-      <div className="page-header">
+    <div className="page page-wide">
+      <div className="page-head">
         <h1>History</h1>
-        <select value={seasonId ?? ''} onChange={(e) => setSeasonId(e.target.value)}>
-          {seasons.map((s) => (
-            <option key={s.id} value={s.id}>{s.year}</option>
-          ))}
-        </select>
+        <PillGroup
+          items={seasons.map((s) => ({ id: s.id, label: String(s.year) }))}
+          activeId={seasonId ?? ''}
+          onSelect={setSeasonId}
+        />
       </div>
+
       {loading ? (
         <p>Loading...</p>
       ) : (
-        <table className="standings-table">
-          <thead>
-            <tr>
-              <th>Rank</th>
-              <th>Player</th>
-              <th>Points</th>
-              <th>Record</th>
-              <th>Pick pts</th>
-              <th>Bonus pts</th>
-              <th>Preseason pts</th>
-            </tr>
-          </thead>
-          <tbody>
+        <>
+          <div className="desktop-rows">
+            <div className="history-grid-head">
+              <span></span>
+              <span>Player</span>
+              <span>Points</span>
+              <span>Record</span>
+              <span>Pick</span>
+              <span>Bonus</span>
+              <span>Preseason</span>
+            </div>
             {rows.map((row, i) => (
-              <tr key={row.player_id}>
-                <td>{i + 1}</td>
-                <td>{row.display_name}</td>
-                <td>{row.total_points}</td>
-                <td>{row.wins}-{row.losses}{row.ties ? `-${row.ties}` : ''}</td>
-                <td>{row.pick_points}</td>
-                <td>{row.bonus_points}</td>
-                <td>{row.preseason_points}</td>
-              </tr>
+              <div className="history-grid-row" key={row.player_id}>
+                <span className="history-rank">{i + 1}</span>
+                <span className={`history-name ${row.player_id === player?.id ? 'history-name-self' : ''}`}>{row.display_name}</span>
+                <span className="history-points">{row.total_points}</span>
+                <span className="history-num">{record(row)}</span>
+                <span className="history-num">{row.pick_points}</span>
+                <span className="history-num">{row.bonus_points}</span>
+                <span className="history-num">{row.preseason_points}</span>
+              </div>
             ))}
-          </tbody>
-        </table>
+          </div>
+
+          <div className="mobile-cards">
+            {rows.map((row, i) => (
+              <div className="phone-history-card" key={row.player_id}>
+                <div className="phone-history-top">
+                  <span className="history-rank">{i + 1}</span>
+                  <span className={`history-name ${row.player_id === player?.id ? 'history-name-self' : ''}`}>{row.display_name}</span>
+                  <span className="history-record">{record(row)}</span>
+                  <span className="history-points">{row.total_points}</span>
+                </div>
+                <div className="phone-history-bottom">
+                  <span>pick {row.pick_points}</span>
+                  <span>bonus {row.bonus_points}</span>
+                  <span>pre {row.preseason_points}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       )}
+      {!loading && rows.length === 0 && <p className="hint">No standings for {selectedSeason?.year ?? 'this season'} yet.</p>}
     </div>
   );
 }

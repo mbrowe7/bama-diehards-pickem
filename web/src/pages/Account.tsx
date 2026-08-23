@@ -10,7 +10,7 @@ export function Account() {
 
   return (
     <div className="page">
-      <div className="page-header">
+      <div className="page-head">
         <h1>Account</h1>
       </div>
       <button type="button" onClick={() => setChangingPassword(true)}>

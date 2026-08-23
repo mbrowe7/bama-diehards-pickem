@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useCurrentSeason } from '../../hooks/useCurrentSeason';
+import { PillGroup } from '../../components/PillGroup';
+import { spreadText } from '../../lib/format';
 import type { Database } from '../../types/database';
 
 type Week = Database['public']['Tables']['weeks']['Row'];
@@ -15,13 +17,20 @@ interface GameRow {
   underdog_team: Team;
 }
 
+function resultText(game: GameRow) {
+  if (!game.result) return { text: 'not scored', tone: 'faint' as const };
+  if (game.result === 'push') return { text: 'push', tone: 'dim' as const };
+  const coveringTeam = game.result === 'favorite_covered' ? game.favorite_team : game.underdog_team;
+  return { text: `${coveringTeam.name} covered`, tone: 'good' as const };
+}
+
 export function EnterResults() {
   const { season, loading: seasonLoading } = useCurrentSeason();
   const [weeks, setWeeks] = useState<Week[]>([]);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [games, setGames] = useState<GameRow[]>([]);
   const [scores, setScores] = useState<Record<string, { favorite: string; underdog: string }>>({});
-  const [savingId, setSavingId] = useState<string | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
 
   useEffect(() => {
     if (!season) return;
@@ -50,53 +59,84 @@ export function EnterResults() {
 
   useEffect(() => { loadGames(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [selectedWeekId]);
 
-  async function saveScore(gameId: string) {
-    const entry = scores[gameId];
-    if (!entry || entry.favorite === '' || entry.underdog === '') return;
-    setSavingId(gameId);
-    await supabase
+  async function saveWeek() {
+    const changed = games.filter((g) => {
+      const entry = scores[g.id];
+      if (!entry || entry.favorite === '' || entry.underdog === '') return false;
+      return Number(entry.favorite) !== g.favorite_score || Number(entry.underdog) !== g.underdog_score;
+    });
+    if (!changed.length) return;
+    setSavingAll(true);
+    await Promise.all(changed.map((g) => supabase
       .from('games')
-      .update({ favorite_score: Number(entry.favorite), underdog_score: Number(entry.underdog) })
-      .eq('id', gameId);
-    setSavingId(null);
+      .update({ favorite_score: Number(scores[g.id].favorite), underdog_score: Number(scores[g.id].underdog) })
+      .eq('id', g.id)));
+    setSavingAll(false);
     loadGames();
   }
+
+  const selectedWeek = weeks.find((w) => w.id === selectedWeekId);
+  const scoredCount = games.filter((g) => g.result !== null).length;
 
   if (seasonLoading || !season) return <p>Loading...</p>;
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1>Enter Results — {season.year}</h1>
-        <select value={selectedWeekId ?? ''} onChange={(e) => setSelectedWeekId(e.target.value)}>
-          {weeks.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
-        </select>
+      <div className="page-head">
+        <div className="page-head-left">
+          <h1>Enter Results</h1>
+          <span className="page-status">{selectedWeek?.label ?? ''} · {scoredCount} of {games.length} scored</span>
+        </div>
+        <PillGroup
+          items={weeks.map((w) => ({ id: w.id, label: w.label }))}
+          activeId={selectedWeekId ?? ''}
+          onSelect={setSelectedWeekId}
+        />
       </div>
 
-      <div className="results-list">
-        {games.map((g) => (
-          <div className="results-row" key={g.id}>
-            <span className="results-matchup">
-              {g.underdog_team.name} (+{g.spread}) at {g.favorite_team.name} (-{g.spread})
+      <div className="results-grid-head">
+        <span>Matchup</span>
+        <span>Dog</span>
+        <span>Fav</span>
+        <span>Result</span>
+      </div>
+      {games.map((g) => {
+        const result = resultText(g);
+        return (
+          <div className="results-grid-row" key={g.id}>
+            <span className="results-matchup-cell">
+              {g.underdog_team.name} <span className="mono">{spreadText(g.spread, false)}</span>{' '}
+              <span className="at">at</span> {g.favorite_team.name}
             </span>
             <input
-              type="number" placeholder="Underdog score"
+              type="number"
+              className="score-input"
+              placeholder="—"
               value={scores[g.id]?.underdog ?? ''}
               onChange={(e) => setScores((prev) => ({ ...prev, [g.id]: { ...prev[g.id], underdog: e.target.value } }))}
             />
             <input
-              type="number" placeholder="Favorite score"
+              type="number"
+              className="score-input"
+              placeholder="—"
               value={scores[g.id]?.favorite ?? ''}
               onChange={(e) => setScores((prev) => ({ ...prev, [g.id]: { ...prev[g.id], favorite: e.target.value } }))}
             />
-            <button type="button" disabled={savingId === g.id} onClick={() => saveScore(g.id)}>
-              {savingId === g.id ? 'Saving...' : 'Save'}
-            </button>
-            {g.result && <span className={`tag tag-result-${g.result}`}>{g.result.replace('_', ' ')}</span>}
+            <span className={`result-text ${result.tone === 'good' ? 'result-good' : result.tone === 'dim' ? 'result-push' : ''}`}>
+              {result.text}
+            </span>
           </div>
-        ))}
-        {games.length === 0 && <p className="hint">No games in this week.</p>}
-      </div>
+        );
+      })}
+      {games.length === 0 && <p className="hint">No games in this week.</p>}
+
+      {games.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <button type="button" disabled={savingAll} onClick={saveWeek}>
+            {savingAll ? 'Saving…' : 'Save week'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

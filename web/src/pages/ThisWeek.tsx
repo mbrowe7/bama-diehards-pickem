@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useCurrentSeason } from '../hooks/useCurrentSeason';
 import { usePlayers } from '../hooks/usePlayers';
+import { PillGroup } from '../components/PillGroup';
+import { formatTime, formatShortDayTime, spreadText } from '../lib/format';
 import type { Database } from '../types/database';
 
 type Week = Database['public']['Tables']['weeks']['Row'];
@@ -22,10 +24,28 @@ interface GameRow {
 type Pick = Database['public']['Tables']['picks']['Row'];
 type BonusPick = Database['public']['Tables']['bonus_picks']['Row'];
 
-function formatKickoff(iso: string) {
-  return new Date(iso).toLocaleString(undefined, {
-    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-  });
+function formatDayLabel(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { weekday: 'long' });
+}
+
+function scoreOutcome(game: GameRow, pick: Pick | undefined) {
+  if (!game.result) return { text: game.neutral_site ?? '', tone: 'neutral' as const };
+  const scoreText = `${game.favorite_score}–${game.underdog_score}`;
+  if (game.result === 'push') return { text: `${scoreText} · push`, tone: 'neutral' as const };
+  const coveringTeamId = game.result === 'favorite_covered' ? game.favorite_team.id : game.underdog_team.id;
+  if (pick) {
+    const covered = pick.team_id === coveringTeamId;
+    return { text: `${scoreText} · ${covered ? 'covered' : 'missed'}`, tone: covered ? 'good' as const : 'bad' as const };
+  }
+  const coveringTeamName = game.result === 'favorite_covered' ? game.favorite_team.name : game.underdog_team.name;
+  return { text: `${scoreText} · ${coveringTeamName} covered`, tone: 'neutral' as const };
+}
+
+function pickGradeClass(game: GameRow, side: 'favorite' | 'underdog'): string | null {
+  if (!game.result || game.result === 'push') return null;
+  const covered = (side === 'favorite' && game.result === 'favorite_covered')
+    || (side === 'underdog' && game.result === 'underdog_covered');
+  return covered ? 'pick-covered' : 'pick-missed';
 }
 
 export function ThisWeek() {
@@ -35,6 +55,7 @@ export function ThisWeek() {
 
   const [weeks, setWeeks] = useState<Week[]>([]);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
+  const [currentWeekId, setCurrentWeekId] = useState<string | null>(null);
   const [games, setGames] = useState<GameRow[]>([]);
   const [picks, setPicks] = useState<Record<string, Pick>>({}); // game_id -> pick
   const [bonusPick, setBonusPick] = useState<BonusPick | null>(null);
@@ -79,7 +100,9 @@ export function ThisWeek() {
         data.filter((g) => new Date(g.kickoff_at).getTime() > now).map((g) => g.week_id),
       );
       const current = weeks.find((w) => upcomingWeekIds.has(w.id));
-      setSelectedWeekId(current ? current.id : weeks[weeks.length - 1].id);
+      const currentId = current ? current.id : weeks[weeks.length - 1].id;
+      setCurrentWeekId(currentId);
+      setSelectedWeekId((prev) => prev ?? currentId);
     })();
     return () => { cancelled = true; };
   }, [weeks]);
@@ -127,7 +150,20 @@ export function ThisWeek() {
 
   async function makePick(game: GameRow, teamId: string) {
     if (!effectivePlayerId || !player) return;
+    const existing = picks[game.id];
     setSavingGameId(game.id);
+    if (existing?.team_id === teamId) {
+      const { error } = await supabase.from('picks').delete().eq('id', existing.id);
+      if (!error) {
+        setPicks((prev) => {
+          const next = { ...prev };
+          delete next[game.id];
+          return next;
+        });
+      }
+      setSavingGameId(null);
+      return;
+    }
     const { data, error } = await supabase
       .from('picks')
       .upsert(
@@ -167,104 +203,221 @@ export function ThisWeek() {
   }
 
   const selectedWeek = useMemo(() => weeks.find((w) => w.id === selectedWeekId), [weeks, selectedWeekId]);
+  const currentWeek = useMemo(() => weeks.find((w) => w.id === currentWeekId), [weeks, currentWeekId]);
   const bonusLockKickoff = useMemo(
     () => (games.length ? games.map((g) => g.kickoff_at).sort()[0] : null),
     [games],
   );
   const bonusLocked = bonusLockKickoff ? new Date(bonusLockKickoff).getTime() <= Date.now() : false;
 
+  const dayGroups = useMemo(() => {
+    const groups: { label: string; games: GameRow[] }[] = [];
+    for (const game of games) {
+      const label = formatDayLabel(game.kickoff_at);
+      let group = groups.find((g) => g.label === label);
+      if (!group) {
+        group = { label, games: [] };
+        groups.push(group);
+      }
+      group.games.push(game);
+    }
+    return groups;
+  }, [games]);
+
+  const pickedCount = Object.keys(picks).length;
+
   if (!season) return <p>Loading...</p>;
 
   return (
     <div className="page">
-      <div className="page-header">
-        <h1>This Week</h1>
-        <div className="page-header-controls">
-          <select
-            value={selectedWeekId ?? ''}
-            onChange={(e) => setSelectedWeekId(e.target.value)}
-          >
-            {weeks.map((w) => (
-              <option key={w.id} value={w.id}>{w.label}</option>
-            ))}
-          </select>
-          {isAdmin && (
-            <select
-              value={viewingPlayerId ?? player?.id ?? ''}
-              onChange={(e) => setViewingPlayerId(e.target.value)}
-            >
-              {players.map((p) => (
-                <option key={p.id} value={p.id}>{p.display_name}</option>
-              ))}
-            </select>
-          )}
-        </div>
-      </div>
-
-      {loading ? (
-        <p>Loading games...</p>
-      ) : games.length === 0 ? (
-        <p>No games posted for {selectedWeek?.label} yet.</p>
-      ) : (
-        <div className="game-list">
-          {games.map((game) => {
-            const locked = !isAdmin && new Date(game.kickoff_at).getTime() <= Date.now();
-            const pick = picks[game.id];
-            return (
-              <div className="game-card" key={game.id}>
-                <div className="game-meta">
-                  <span>{formatKickoff(game.kickoff_at)}</span>
-                  {game.neutral_site && <span className="tag">at {game.neutral_site}</span>}
-                  {locked && <span className="tag tag-locked">Locked</span>}
-                  {game.result && <span className={`tag tag-result-${game.result}`}>{describeResult(game)}</span>}
-                </div>
-                <div className="game-teams">
-                  <button
-                    type="button"
-                    className={`team-button ${pick?.team_id === game.underdog_team.id ? 'selected' : ''}`}
-                    disabled={locked || savingGameId === game.id}
-                    onClick={() => makePick(game, game.underdog_team.id)}
-                  >
-                    {game.underdog_team.name} <span className="spread">+{game.spread}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`team-button ${pick?.team_id === game.favorite_team.id ? 'selected' : ''}`}
-                    disabled={locked || savingGameId === game.id}
-                    onClick={() => makePick(game, game.favorite_team.id)}
-                  >
-                    {game.favorite_team.name} <span className="spread">-{game.spread}</span>
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-
-          <div className="game-card bonus-card">
-            <div className="game-meta">
-              <span className="tag tag-bonus">Bonus</span>
-              {bonusLocked && !isAdmin && <span className="tag tag-locked">Locked</span>}
-            </div>
-            <div className="bonus-input-row">
-              <input
-                type="text"
-                placeholder='e.g. "Boise State -6.5"'
-                value={bonusText}
-                disabled={bonusLocked && !isAdmin}
-                onChange={(e) => setBonusText(e.target.value)}
-                onBlur={saveBonus}
-              />
-            </div>
+        <div className="page-head">
+          <div className="page-head-left">
+            <h1>{selectedWeek?.label ?? 'This Week'}</h1>
+            {games.length > 0 && (
+              <span className="page-status">
+                {pickedCount} of {games.length} picked
+                {bonusLockKickoff && ` · locks ${formatShortDayTime(bonusLockKickoff)}`}
+              </span>
+            )}
+          </div>
+          <div className="page-head-controls" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {isAdmin && (
+              <select
+                value={viewingPlayerId ?? player?.id ?? ''}
+                onChange={(e) => setViewingPlayerId(e.target.value)}
+              >
+                {players.map((p) => (
+                  <option key={p.id} value={p.id}>{p.display_name}</option>
+                ))}
+              </select>
+            )}
+            <PillGroup
+              items={weeks.map((w) => ({
+                id: w.id,
+                label: w.label,
+                faint: !!currentWeek && w.sort_order > currentWeek.sort_order,
+              }))}
+              activeId={selectedWeekId ?? ''}
+              onSelect={setSelectedWeekId}
+            />
           </div>
         </div>
-      )}
+
+        {loading ? (
+          <p>Loading games...</p>
+        ) : games.length === 0 ? (
+          <p>No games posted for {selectedWeek?.label} yet.</p>
+        ) : (
+          <>
+            <div className="desktop-rows">
+              {dayGroups.map((group) => (
+                <div key={group.label}>
+                  <div className="day-label">{group.label}</div>
+                  <div className="day-group">
+                    {group.games.map((game) => {
+                      const locked = !isAdmin && new Date(game.kickoff_at).getTime() <= Date.now();
+                      const pick = picks[game.id];
+                      const dogSelected = pick?.team_id === game.underdog_team.id;
+                      const favSelected = pick?.team_id === game.favorite_team.id;
+                      const note = scoreOutcome(game, pick);
+                      return (
+                        <div className="game-row" key={game.id}>
+                          <span className="game-time">{formatTime(game.kickoff_at)}</span>
+                          <div className="game-picks">
+                            <button
+                              type="button"
+                              className={[
+                                'pick-btn',
+                                dogSelected && `pick-selected ${pickGradeClass(game, 'underdog') ?? 'pick-pending'}`,
+                                !dogSelected && locked && 'pick-locked',
+                              ].filter(Boolean).join(' ')}
+                              disabled={locked || savingGameId === game.id}
+                              onClick={() => makePick(game, game.underdog_team.id)}
+                            >
+                              <span className="pick-team">{game.underdog_team.name}</span>
+                              <span className="pick-spread">{spreadText(game.spread, false)}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={[
+                                'pick-btn',
+                                favSelected && `pick-selected ${pickGradeClass(game, 'favorite') ?? 'pick-pending'}`,
+                                !favSelected && locked && 'pick-locked',
+                              ].filter(Boolean).join(' ')}
+                              disabled={locked || savingGameId === game.id}
+                              onClick={() => makePick(game, game.favorite_team.id)}
+                            >
+                              <span className="pick-team">{game.favorite_team.name}</span>
+                              <span className="pick-spread">{spreadText(game.spread, true)}</span>
+                            </button>
+                          </div>
+                          <span className={`game-note ${note.tone === 'good' ? 'game-note-good' : note.tone === 'bad' ? 'game-note-bad' : ''}`}>
+                            {note.text}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              <div className="bonus-row">
+                <span className="bonus-label">Bonus</span>
+                <input
+                  type="text"
+                  className="bonus-value"
+                  placeholder='e.g. "Boise State −6.5"'
+                  value={bonusText}
+                  disabled={bonusLocked && !isAdmin}
+                  onChange={(e) => setBonusText(e.target.value)}
+                  onBlur={saveBonus}
+                />
+                {bonusPick && <span className="bonus-saved">saved</span>}
+              </div>
+            </div>
+
+            <div className="mobile-cards">
+              {games.map((game) => {
+                const locked = !isAdmin && new Date(game.kickoff_at).getTime() <= Date.now();
+                const pick = picks[game.id];
+                const note = scoreOutcome(game, pick);
+                if (locked) {
+                  return (
+                    <div className="phone-final-card" key={game.id}>
+                      <div className="phone-final-top">
+                        <span className="phone-game-time">{formatTime(game.kickoff_at)}</span>
+                        <span className={note.tone === 'good' ? 'game-note-good' : note.tone === 'bad' ? 'game-note-bad' : 'phone-game-note'} style={{ fontSize: 11 }}>
+                          {note.text}
+                        </span>
+                      </div>
+                      <div className="phone-final-bottom">
+                        <span className="phone-final-team">
+                          {pick?.team_id === game.favorite_team.id ? game.favorite_team.name : game.underdog_team.name}
+                          {' '}
+                          <span className="phone-final-spread">
+                            {pick?.team_id === game.favorite_team.id ? spreadText(game.spread, true) : spreadText(game.spread, false)}
+                          </span>
+                        </span>
+                        {game.result && (
+                          <span className="phone-final-score">{game.favorite_score}–{game.underdog_score}</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+                const dogSelected = pick?.team_id === game.underdog_team.id;
+                const favSelected = pick?.team_id === game.favorite_team.id;
+                const thumbClass = dogSelected
+                  ? `phone-thumb phone-thumb-dog ${pickGradeClass(game, 'underdog') === 'pick-covered' ? 'phone-thumb-covered' : pickGradeClass(game, 'underdog') === 'pick-missed' ? 'phone-thumb-missed' : ''}`
+                  : favSelected
+                    ? `phone-thumb phone-thumb-fav ${pickGradeClass(game, 'favorite') === 'pick-covered' ? 'phone-thumb-covered' : pickGradeClass(game, 'favorite') === 'pick-missed' ? 'phone-thumb-missed' : ''}`
+                    : 'phone-thumb';
+                return (
+                  <div className="phone-game-card" key={game.id}>
+                    <div className="phone-game-top">
+                      <span className="phone-game-time">{formatTime(game.kickoff_at)}</span>
+                      <span className="phone-game-note">{note.text}</span>
+                    </div>
+                    <div className="phone-track">
+                      <div className={thumbClass} />
+                      <button
+                        type="button"
+                        className="phone-side phone-side-dog"
+                        disabled={savingGameId === game.id}
+                        onClick={() => makePick(game, game.underdog_team.id)}
+                      >
+                        <span className="phone-team">{game.underdog_team.name}</span>
+                        <span className="phone-spread">{spreadText(game.spread, false)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="phone-side phone-side-fav"
+                        disabled={savingGameId === game.id}
+                        onClick={() => makePick(game, game.favorite_team.id)}
+                      >
+                        <span className="phone-team">{game.favorite_team.name}</span>
+                        <span className="phone-spread">{spreadText(game.spread, true)}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div className="phone-bonus-row">
+                <span className="bonus-label">Bonus</span>
+                <input
+                  type="text"
+                  className="phone-bonus-value"
+                  placeholder="Add one extra pick…"
+                  value={bonusText}
+                  disabled={bonusLocked && !isAdmin}
+                  onChange={(e) => setBonusText(e.target.value)}
+                  onBlur={saveBonus}
+                />
+              </div>
+            </div>
+          </>
+        )}
     </div>
   );
-}
-
-function describeResult(game: GameRow) {
-  if (game.result === 'push') return 'Push';
-  if (game.result === 'favorite_covered') return `${game.favorite_team.name} covered`;
-  if (game.result === 'underdog_covered') return `${game.underdog_team.name} covered`;
-  return '';
 }
