@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to players-map.json and fill in each person's real email. load.mjs uses this to provision their auth.users account (magic-link login will work immediately after) and link their historical picks to it.",
+  "Griffin": "",
+  "Wells": "",
+  "Jimmy": "",
+  "Ike": "",
+  "Jon": "",
+  "Murphy": "",
+  "Lumia": "",
+  "Slick": "",
+  "Mike": ""
+}

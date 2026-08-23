@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.local
+
+# Migration working files -- real emails, real parse output, not source
+scripts/migrate/players-map.json
+scripts/migrate/output/
+migration-output/
+
+.DS_Store
+
+# Local Netlify folder
+.netlify

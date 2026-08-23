@@ -1,0 +1,15 @@
+{
+  "name": "bama-diehards-migration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "parse": "node parse.mjs",
+    "validate": "node validate.mjs",
+    "load": "node load.mjs",
+    "set-password": "node set_password.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "xlsx": "^0.18.5"
+  }
+}
