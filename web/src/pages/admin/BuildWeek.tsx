@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useCurrentSeason } from '../../hooks/useCurrentSeason';
 import { useTeams } from '../../hooks/useTeams';
+import { PillGroup } from '../../components/PillGroup';
+import { formatShortDayDate, spreadText } from '../../lib/format';
 import type { Database } from '../../types/database';
 
 type Week = Database['public']['Tables']['weeks']['Row'];
@@ -22,6 +24,8 @@ export function BuildWeek() {
   const [weeks, setWeeks] = useState<Week[]>([]);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [games, setGames] = useState<GameRow[]>([]);
+  const [pickedPlayerCount, setPickedPlayerCount] = useState(0);
+  const [creatingWeek, setCreatingWeek] = useState(false);
   const [newWeekLabel, setNewWeekLabel] = useState('');
   const [newWeekSort, setNewWeekSort] = useState('');
 
@@ -43,13 +47,23 @@ export function BuildWeek() {
   useEffect(() => { loadWeeks(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [season]);
 
   async function loadGames() {
-    if (!selectedWeekId) { setGames([]); return; }
+    if (!selectedWeekId) { setGames([]); setPickedPlayerCount(0); return; }
     const { data } = await supabase
       .from('games')
       .select('id, spread, neutral_site, kickoff_at, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
       .eq('week_id', selectedWeekId)
       .order('kickoff_at');
-    setGames((data ?? []) as unknown as GameRow[]);
+    const rows = (data ?? []) as unknown as GameRow[];
+    setGames(rows);
+    if (rows.length) {
+      const { data: pickRows } = await supabase
+        .from('picks')
+        .select('player_id')
+        .in('game_id', rows.map((g) => g.id));
+      setPickedPlayerCount(new Set((pickRows ?? []).map((p) => p.player_id)).size);
+    } else {
+      setPickedPlayerCount(0);
+    }
   }
 
   useEffect(() => { loadGames(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [selectedWeekId]);
@@ -65,6 +79,7 @@ export function BuildWeek() {
     if (!error && data) {
       setNewWeekLabel('');
       setNewWeekSort('');
+      setCreatingWeek(false);
       await loadWeeks();
       setSelectedWeekId(data.id);
     }
@@ -104,76 +119,96 @@ export function BuildWeek() {
     loadGames();
   }
 
+  const selectedWeek = weeks.find((w) => w.id === selectedWeekId);
+
   if (seasonLoading || !season) return <p>Loading...</p>;
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>Build Week — {season.year}</h1>
-        <select value={selectedWeekId ?? ''} onChange={(e) => setSelectedWeekId(e.target.value)}>
-          {weeks.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
-        </select>
+    <div className="page page-wide">
+      <div className="page-head">
+        <div className="page-head-left">
+          <h1>Build Week</h1>
+          <span className="page-status">
+            {games.length} games in {selectedWeek?.label ?? 'this week'} · {pickedPlayerCount} players have picked
+          </span>
+        </div>
+        <PillGroup
+          items={weeks.map((w) => ({ id: w.id, label: w.label }))}
+          activeId={selectedWeekId ?? ''}
+          onSelect={setSelectedWeekId}
+          trailing={{ label: '+ New', onClick: () => setCreatingWeek((c) => !c) }}
+        />
       </div>
 
-      <form className="inline-form" onSubmit={createWeek}>
-        <input
-          type="text" placeholder="Week label (e.g. Week 3)"
-          value={newWeekLabel} onChange={(e) => setNewWeekLabel(e.target.value)}
-        />
-        <input
-          type="number" placeholder="Sort order" style={{ width: '7rem' }}
-          value={newWeekSort} onChange={(e) => setNewWeekSort(e.target.value)}
-        />
-        <button type="submit">+ New Week</button>
-      </form>
+      {creatingWeek && (
+        <form className="inline-form" onSubmit={createWeek}>
+          <input
+            type="text" placeholder="Week label (e.g. Week 3)"
+            value={newWeekLabel} onChange={(e) => setNewWeekLabel(e.target.value)}
+          />
+          <input
+            type="number" placeholder="Sort order" style={{ width: '7rem' }}
+            value={newWeekSort} onChange={(e) => setNewWeekSort(e.target.value)}
+          />
+          <button type="submit">Create week</button>
+        </form>
+      )}
 
       {selectedWeekId && (
         <>
-          <h2>Games</h2>
-          <ul className="admin-game-list">
+          <div style={{ marginBottom: 28 }}>
             {games.map((g) => (
-              <li key={g.id}>
-                <span>
-                  {g.underdog_team.name} (+{g.spread}) at {g.favorite_team.name} (-{g.spread})
-                  {g.neutral_site && ` — ${g.neutral_site}`} — {new Date(g.kickoff_at).toLocaleString()}
+              <div className="build-row" key={g.id}>
+                <span className="build-when">{formatShortDayDate(g.kickoff_at)}</span>
+                <span className="build-matchup">
+                  {g.underdog_team.name} <span className="mono">{spreadText(g.spread, false)}</span>{' '}
+                  <span className="at">at</span>{' '}
+                  {g.favorite_team.name} <span className="mono">{spreadText(g.spread, true)}</span>
                 </span>
-                <button type="button" className="link-button danger" onClick={() => deleteGame(g.id)}>Delete</button>
-              </li>
+                <span className="build-site">{g.neutral_site ?? ''}</span>
+                <button type="button" className="build-remove-btn" onClick={() => deleteGame(g.id)}>Remove</button>
+              </div>
             ))}
-            {games.length === 0 && <li className="hint">No games yet.</li>}
-          </ul>
+            {games.length === 0 && <p className="hint">No games yet.</p>}
+          </div>
 
-          <h2>Add Game</h2>
-          <form className="game-form" onSubmit={createGame}>
-            <label>
-              Favorite
-              <select value={favoriteId} onChange={(e) => setFavoriteId(e.target.value)}>
-                <option value="">—</option>
-                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </label>
-            <label>
-              Underdog
-              <select value={underdogId} onChange={(e) => setUnderdogId(e.target.value)}>
-                <option value="">—</option>
-                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            </label>
-            <label>
-              Spread
-              <input type="number" step="0.5" min="0" value={spread} onChange={(e) => setSpread(e.target.value)} />
-            </label>
-            <label>
-              Kickoff
-              <input type="datetime-local" value={kickoff} onChange={(e) => setKickoff(e.target.value)} />
-            </label>
-            <label>
-              Neutral site (optional)
-              <input type="text" value={neutralSite} onChange={(e) => setNeutralSite(e.target.value)} />
-            </label>
-            {formError && <p className="error-text">{formError}</p>}
-            <button type="submit" disabled={saving}>{saving ? 'Adding...' : 'Add Game'}</button>
-          </form>
+          <div className="add-game-panel">
+            <div className="add-game-label">Add game</div>
+            <form onSubmit={createGame}>
+              <div className="add-game-grid">
+                <label className="field-group">
+                  Favorite
+                  <select value={favoriteId} onChange={(e) => setFavoriteId(e.target.value)}>
+                    <option value="">Choose…</option>
+                    {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </label>
+                <label className="field-group">
+                  Underdog
+                  <select value={underdogId} onChange={(e) => setUnderdogId(e.target.value)}>
+                    <option value="">Choose…</option>
+                    {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </label>
+                <label className="field-group">
+                  Spread
+                  <input className="mono" type="number" step="0.5" min="0" value={spread} onChange={(e) => setSpread(e.target.value)} />
+                </label>
+                <label className="field-group">
+                  Kickoff
+                  <input className="mono" type="datetime-local" value={kickoff} onChange={(e) => setKickoff(e.target.value)} />
+                </label>
+              </div>
+              <div className="add-game-row2">
+                <label className="field-group">
+                  Neutral site (optional)
+                  <input type="text" value={neutralSite} onChange={(e) => setNeutralSite(e.target.value)} />
+                </label>
+                <button type="submit" disabled={saving}>{saving ? 'Adding…' : 'Add game'}</button>
+              </div>
+              {formError && <p className="error-text">{formError}</p>}
+            </form>
+          </div>
         </>
       )}
     </div>
