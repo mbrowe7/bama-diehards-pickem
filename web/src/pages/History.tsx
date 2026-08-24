@@ -5,9 +5,21 @@ import { PillGroup } from '../components/PillGroup';
 import type { Database } from '../types/database';
 
 type Season = Database['public']['Tables']['seasons']['Row'];
-type StandingsRow = Database['public']['Views']['standings']['Row'];
+type FinalStandingsRow = Database['public']['Tables']['season_final_standings']['Row'];
 
-function record(row: StandingsRow) {
+type Row = {
+  player_id: string;
+  display_name: string;
+  total_points: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  pick_points: number | null;
+  bonus_points: number | null;
+  preseason_points: number | null;
+};
+
+function record(row: Row) {
   return `${row.wins}-${row.losses}${row.ties ? `-${row.ties}` : ''}`;
 }
 
@@ -15,7 +27,8 @@ export function History() {
   const { player } = useAuth();
   const [seasons, setSeasons] = useState<Season[]>([]);
   const [seasonId, setSeasonId] = useState<string | null>(null);
-  const [rows, setRows] = useState<StandingsRow[]>([]);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [hasBreakdown, setHasBreakdown] = useState(true);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,13 +43,41 @@ export function History() {
     if (!seasonId) return;
     setLoading(true);
     supabase
-      .from('standings')
-      .select('*')
+      .from('season_final_standings')
+      .select('*, players(display_name)')
       .eq('season_id', seasonId)
-      .order('total_points', { ascending: false })
+      .order('rank', { ascending: true })
       .then(({ data }) => {
-        setRows(data ?? []);
-        setLoading(false);
+        const finalRows = (data ?? []) as (FinalStandingsRow & { players: { display_name: string } | null })[];
+        if (finalRows.length) {
+          setHasBreakdown(false);
+          setRows(
+            finalRows.map((r) => ({
+              player_id: r.player_id,
+              display_name: r.players?.display_name ?? '',
+              total_points: r.total_points,
+              wins: r.wins,
+              losses: r.losses,
+              ties: r.ties,
+              pick_points: null,
+              bonus_points: null,
+              preseason_points: null,
+            })),
+          );
+          setLoading(false);
+          return;
+        }
+
+        supabase
+          .from('standings')
+          .select('*')
+          .eq('season_id', seasonId)
+          .order('total_points', { ascending: false })
+          .then(({ data: liveRows }) => {
+            setHasBreakdown(true);
+            setRows(liveRows ?? []);
+            setLoading(false);
+          });
       });
   }, [seasonId]);
 
@@ -63,9 +104,13 @@ export function History() {
               <span>Player</span>
               <span>Points</span>
               <span>Record</span>
-              <span>Pick</span>
-              <span>Bonus</span>
-              <span>Preseason</span>
+              {hasBreakdown && (
+                <>
+                  <span>Pick</span>
+                  <span>Bonus</span>
+                  <span>Preseason</span>
+                </>
+              )}
             </div>
             {rows.map((row, i) => (
               <div className="history-grid-row" key={row.player_id}>
@@ -73,9 +118,13 @@ export function History() {
                 <span className={`history-name ${row.player_id === player?.id ? 'history-name-self' : ''}`}>{row.display_name}</span>
                 <span className="history-points">{row.total_points}</span>
                 <span className="history-num">{record(row)}</span>
-                <span className="history-num">{row.pick_points}</span>
-                <span className="history-num">{row.bonus_points}</span>
-                <span className="history-num">{row.preseason_points}</span>
+                {hasBreakdown && (
+                  <>
+                    <span className="history-num">{row.pick_points}</span>
+                    <span className="history-num">{row.bonus_points}</span>
+                    <span className="history-num">{row.preseason_points}</span>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -89,11 +138,13 @@ export function History() {
                   <span className="history-record">{record(row)}</span>
                   <span className="history-points">{row.total_points}</span>
                 </div>
-                <div className="phone-history-bottom">
-                  <span>pick {row.pick_points}</span>
-                  <span>bonus {row.bonus_points}</span>
-                  <span>pre {row.preseason_points}</span>
-                </div>
+                {hasBreakdown && (
+                  <div className="phone-history-bottom">
+                    <span>pick {row.pick_points}</span>
+                    <span>bonus {row.bonus_points}</span>
+                    <span>pre {row.preseason_points}</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>

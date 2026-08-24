@@ -112,6 +112,18 @@ export interface Database {
         Update: Partial<{ team_id: string | null; player_name: string | null }>;
         Relationships: [];
       };
+      season_final_standings: {
+        Row: {
+          id: string; season_id: string; player_id: string; rank: number;
+          total_points: number; wins: number; losses: number; ties: number;
+        };
+        Insert: {
+          id?: string; season_id: string; player_id: string; rank: number;
+          total_points: number; wins: number; losses: number; ties?: number;
+        };
+        Update: Partial<{ rank: number; total_points: number; wins: number; losses: number; ties: number }>;
+        Relationships: [];
+      };
     };
     Views: {
       standings: {

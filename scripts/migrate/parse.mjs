@@ -144,10 +144,38 @@ for (const [yearStr, info] of Object.entries(seasons)) {
     const players = rows[0].slice(1).map((c) => c.value).filter((p) => p !== '');
     const weekOut = { sheetName, label, sortOrder, games: [], bonusPicks: [] };
 
+    // Aggregate rows (weekly W-L record, running point total, mid-sheet
+    // checkpoints) have a blank description and cells that are either bare
+    // numbers or "W-L" records -- distinct from a genuine pick row, whose
+    // cells hold team/spread text. A blank-description row with pick-shaped
+    // cells means the row's own description got lost in the source sheet
+    // (seen once, "Week 8 (2025)" row 13) -- treat it like a BONUS row
+    // rather than silently dropping real graded picks.
+    const AGGREGATE_CELL_RE = /^\d+(-\d+){0,2}$/;
+
     for (let r = 1; r < rows.length; r++) {
       const row = rows[r];
       const desc = row[0].value;
-      if (desc === '' ) continue;
+      if (desc === '') {
+        const pickCells = row.slice(1).filter((c) => c.value !== '');
+        const looksLikeAggregateRow = pickCells.every((c) => AGGREGATE_CELL_RE.test(c.value));
+        if (pickCells.length === 0 || looksLikeAggregateRow) continue;
+
+        reviewRows.push({
+          season: year, sheet: sheetName, row: r + 1, field: 'blank_description_row',
+          raw: JSON.stringify(pickCells.map((c) => c.value)),
+          resolvedGuess: '', confidence: 'inferred_bonus_row',
+        });
+        players.forEach((player, i) => {
+          const cell = row[i + 1];
+          if (cell && cell.value !== '') {
+            weekOut.bonusPicks.push({
+              player, description: cell.value, isCorrect: fillToIsCorrect(cell.color),
+            });
+          }
+        });
+        continue;
+      }
       if (/^total$/i.test(desc)) break; // record/total rows end the game list
       if (/^\d+-\d+$/.test(desc)) continue; // stray record-looking cell
 
