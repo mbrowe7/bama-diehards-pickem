@@ -658,13 +658,15 @@ a { color: inherit; }
 .standings-split { font-size: 11px; color: var(--faint); white-space: nowrap; }
 
 .bar-track {
+  display: flex;
   height: 4px;
   border-radius: 2px;
   background: var(--surf-2);
   overflow: hidden;
 }
-.bar-fill { height: 100%; border-radius: 2px; background: var(--bar-other); }
-.bar-fill.bar-fill-leader { background: var(--accent); }
+.bar-fill { height: 100%; background: var(--bar-other); }
+.bar-fill.bar-fill-correct { background: var(--good); }
+.bar-fill.bar-fill-incorrect { background: var(--missed-num); }
 
 .form-squares { display: flex; gap: 3px; flex-shrink: 0; }
 .form-square { width: 9px; height: 9px; border-radius: 2px; background: var(--form-miss); }

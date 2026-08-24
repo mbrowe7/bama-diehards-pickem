@@ -31,9 +31,9 @@ export interface Database {
         Relationships: [];
       };
       seasons: {
-        Row: { id: string; year: number; pushes_are_ties: boolean };
-        Insert: { id?: string; year: number; pushes_are_ties?: boolean };
-        Update: Partial<{ year: number; pushes_are_ties: boolean }>;
+        Row: { id: string; year: number; pushes_are_ties: boolean; preseason_lock_at: string | null };
+        Insert: { id?: string; year: number; pushes_are_ties?: boolean; preseason_lock_at?: string | null };
+        Update: Partial<{ year: number; pushes_are_ties: boolean; preseason_lock_at: string | null }>;
         Relationships: [];
       };
       weeks: {
@@ -118,6 +118,15 @@ export interface Database {
         Row: {
           season_id: string; season_year: number; player_id: string; display_name: string;
           total_points: number; pick_points: number; bonus_points: number; preseason_points: number;
+          wins: number; losses: number; ties: number;
+        };
+        Relationships: [];
+      };
+      weekly_standings: {
+        Row: {
+          week_id: string; season_id: string; week_label: string; sort_order: number;
+          player_id: string; display_name: string;
+          total_points: number; pick_points: number; bonus_points: number;
           wins: number; losses: number; ties: number;
         };
         Relationships: [];

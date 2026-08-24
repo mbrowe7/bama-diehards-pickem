@@ -1,17 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useCurrentSeason } from '../hooks/useCurrentSeason';
+import { PillGroup } from '../components/PillGroup';
 import type { Database } from '../types/database';
 
-type StandingsRow = Database['public']['Views']['standings']['Row'];
+type SeasonRow = Database['public']['Views']['standings']['Row'];
+type WeekRow = Database['public']['Views']['weekly_standings']['Row'];
+type Week = Database['public']['Tables']['weeks']['Row'];
 type PickOutcome = Database['public']['Tables']['picks']['Row']['outcome'];
+type Mode = 'season' | 'week';
 
-function record(row: StandingsRow) {
-  return `${row.wins}-${row.losses}${row.ties ? `-${row.ties}` : ''}`;
+interface DisplayRow {
+  player_id: string;
+  display_name: string;
+  total_points: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  split: string;
 }
 
-function split(row: StandingsRow) {
-  return `${row.pick_points} pick · ${row.bonus_points} bonus · ${row.preseason_points} preseason`;
+function record(row: DisplayRow) {
+  return `${row.wins}-${row.losses}${row.ties ? `-${row.ties}` : ''}`;
 }
 
 function formSquareClass(outcome: PickOutcome) {
@@ -20,44 +30,130 @@ function formSquareClass(outcome: PickOutcome) {
   return 'form-square';
 }
 
+function fromSeasonRow(row: SeasonRow): DisplayRow {
+  return {
+    player_id: row.player_id,
+    display_name: row.display_name,
+    total_points: row.total_points,
+    wins: row.wins,
+    losses: row.losses,
+    ties: row.ties,
+    split: `${row.pick_points} pick · ${row.bonus_points} bonus · ${row.preseason_points} preseason`,
+  };
+}
+
+function fromWeekRow(row: WeekRow): DisplayRow {
+  return {
+    player_id: row.player_id,
+    display_name: row.display_name,
+    total_points: row.total_points,
+    wins: row.wins,
+    losses: row.losses,
+    ties: row.ties,
+    split: `${row.pick_points} pick · ${row.bonus_points} bonus`,
+  };
+}
+
 export function Standings() {
   const { season } = useCurrentSeason();
-  const [rows, setRows] = useState<StandingsRow[]>([]);
-  const [form, setForm] = useState<Record<string, PickOutcome[]>>({});
+  const [mode, setMode] = useState<Mode>('season');
+
+  const [seasonRows, setSeasonRows] = useState<SeasonRow[]>([]);
+  const [seasonLoading, setSeasonLoading] = useState(true);
   const [throughWeek, setThroughWeek] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+
+  const [weeks, setWeeks] = useState<Week[]>([]);
+  const [currentWeekId, setCurrentWeekId] = useState<string | null>(null);
+  const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
+  const [weekRows, setWeekRows] = useState<WeekRow[]>([]);
+  const [weekLoading, setWeekLoading] = useState(true);
+
+  const [form, setForm] = useState<Record<string, PickOutcome[]>>({});
 
   useEffect(() => {
     if (!season) return;
-    setLoading(true);
+    setSeasonLoading(true);
     supabase
       .from('standings')
       .select('*')
       .eq('season_id', season.id)
       .order('total_points', { ascending: false })
       .then(({ data }) => {
-        setRows(data ?? []);
-        setLoading(false);
+        setSeasonRows(data ?? []);
+        setSeasonLoading(false);
       });
   }, [season]);
 
-  // Form squares: each player's last five graded picks, oldest -> newest.
+  // Load weeks for the season, default-select the most "current" one.
+  useEffect(() => {
+    if (!season) return;
+    supabase
+      .from('weeks')
+      .select('*')
+      .eq('season_id', season.id)
+      .order('sort_order')
+      .then(({ data }) => setWeeks(data ?? []));
+  }, [season]);
+
+  useEffect(() => {
+    if (!weeks.length) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('games')
+        .select('week_id, kickoff_at')
+        .in('week_id', weeks.map((w) => w.id));
+      if (cancelled || !data) return;
+      const now = Date.now();
+      const upcomingWeekIds = new Set(
+        data.filter((g) => new Date(g.kickoff_at).getTime() > now).map((g) => g.week_id),
+      );
+      const current = weeks.find((w) => upcomingWeekIds.has(w.id));
+      const currentId = current ? current.id : weeks[weeks.length - 1].id;
+      setCurrentWeekId(currentId);
+      setSelectedWeekId((prev) => prev ?? currentId);
+    })();
+    return () => { cancelled = true; };
+  }, [weeks]);
+
+  useEffect(() => {
+    if (!selectedWeekId) return;
+    setWeekLoading(true);
+    supabase
+      .from('weekly_standings')
+      .select('*')
+      .eq('week_id', selectedWeekId)
+      .order('total_points', { ascending: false })
+      .then(({ data }) => {
+        setWeekRows(data ?? []);
+        setWeekLoading(false);
+      });
+  }, [selectedWeekId]);
+
+  // Form squares: each player's last five graded picks (within the current
+  // scope -- the whole season, or just the selected week), oldest -> newest.
   useEffect(() => {
     if (!season) return;
     let cancelled = false;
     (async () => {
-      const { data: weekRows } = await supabase.from('weeks').select('id, label, sort_order').eq('season_id', season.id);
-      const weekIds = (weekRows ?? []).map((w) => w.id);
-      if (!weekIds.length) { if (!cancelled) { setForm({}); setThroughWeek(null); } return; }
+      const weekIds = mode === 'season'
+        ? (await supabase.from('weeks').select('id').eq('season_id', season.id).then(({ data }) => data ?? [])).map((w) => w.id)
+        : (selectedWeekId ? [selectedWeekId] : []);
+      if (cancelled) return;
+      if (!weekIds.length) { setForm({}); if (mode === 'season') setThroughWeek(null); return; }
       const { data: gameRows } = await supabase.from('games').select('id, week_id, kickoff_at, result').in('week_id', weekIds);
+      if (cancelled) return;
       const gameIds = (gameRows ?? []).map((g) => g.id);
       const kickoffByGame = new Map((gameRows ?? []).map((g) => [g.id, g.kickoff_at]));
 
-      const gradedWeeks = (weekRows ?? []).filter((w) =>
-        (gameRows ?? []).some((g) => g.week_id === w.id && g.result !== null),
-      );
-      const latestGraded = gradedWeeks.sort((a, b) => b.sort_order - a.sort_order)[0];
-      if (!cancelled) setThroughWeek(latestGraded?.label ?? null);
+      if (mode === 'season') {
+        const { data: weekRowsForThrough } = await supabase.from('weeks').select('id, label, sort_order').eq('season_id', season.id);
+        const gradedWeeks = (weekRowsForThrough ?? []).filter((w) =>
+          (gameRows ?? []).some((g) => g.week_id === w.id && g.result !== null),
+        );
+        const latestGraded = gradedWeeks.sort((a, b) => b.sort_order - a.sort_order)[0];
+        if (!cancelled) setThroughWeek(latestGraded?.label ?? null);
+      }
 
       if (!gameIds.length) { if (!cancelled) setForm({}); return; }
       const { data: pickRows } = await supabase
@@ -81,27 +177,62 @@ export function Standings() {
       setForm(formMap);
     })();
     return () => { cancelled = true; };
-  }, [season]);
+  }, [season, mode, selectedWeekId]);
 
-  const leaderPoints = useMemo(() => rows[0]?.total_points ?? 0, [rows]);
+  const currentWeek = useMemo(() => weeks.find((w) => w.id === currentWeekId), [weeks, currentWeekId]);
+  const selectedWeek = useMemo(() => weeks.find((w) => w.id === selectedWeekId), [weeks, selectedWeekId]);
+
+  const rows: DisplayRow[] = mode === 'season'
+    ? seasonRows.map(fromSeasonRow)
+    : weekRows.map(fromWeekRow);
+  const loading = mode === 'season' ? seasonLoading : weekLoading;
 
   if (!season) return <p>Loading...</p>;
 
   return (
     <div className="page">
       <div className="page-head">
-        <h1>Standings</h1>
-        <span className="page-status-mono">{season.year}{throughWeek ? ` · through ${throughWeek}` : ''}</span>
+        <div className="page-head-left">
+          <h1>Standings</h1>
+          <span className="page-status-mono">
+            {mode === 'season'
+              ? `${season.year}${throughWeek ? ` · through ${throughWeek}` : ''}`
+              : (selectedWeek?.label ?? season.year)}
+          </span>
+        </div>
+        <div className="page-head-controls" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {mode === 'week' && weeks.length > 0 && (
+            <PillGroup
+              items={weeks.map((w) => ({
+                id: w.id,
+                label: w.label,
+                faint: !!currentWeek && w.sort_order > currentWeek.sort_order,
+              }))}
+              activeId={selectedWeekId ?? ''}
+              onSelect={setSelectedWeekId}
+            />
+          )}
+          <PillGroup
+            items={[{ id: 'season', label: 'Season' }, { id: 'week', label: 'Week' }]}
+            activeId={mode}
+            onSelect={(id) => setMode(id as Mode)}
+          />
+        </div>
       </div>
-      <div className="page-subhead">Form shows the last five picks, newest right.</div>
+      <div className="page-subhead">
+        {mode === 'season' ? 'Form shows the last five picks, newest right.' : "Form shows this week's picks, in kickoff order."}
+      </div>
 
       {loading ? (
         <p>Loading standings...</p>
+      ) : mode === 'week' && weeks.length === 0 ? (
+        <p className="hint">No weeks posted yet.</p>
       ) : (
         <>
           <div className="desktop-rows">
             {rows.map((row, i) => {
-              const barWidth = leaderPoints ? Math.max(0, (row.total_points / leaderPoints) * 100) : 0;
+              const decided = row.wins + row.losses;
+              const correctPct = decided > 0 ? (row.wins / decided) * 100 : 0;
               const rowForm = form[row.player_id] ?? [];
               return (
                 <div className="standings-row" key={row.player_id}>
@@ -109,10 +240,17 @@ export function Standings() {
                   <div className="standings-mid">
                     <div className="standings-name-row">
                       <span className="standings-name">{row.display_name}</span>
-                      <span className="standings-split">{split(row)}</span>
+                      <span className="standings-split">{row.split}</span>
                     </div>
                     <div className="bar-track">
-                      <div className={`bar-fill ${i === 0 ? 'bar-fill-leader' : ''}`} style={{ width: `${barWidth}%` }} />
+                      {decided > 0 ? (
+                        <>
+                          <div className="bar-fill bar-fill-correct" style={{ width: `${correctPct}%` }} />
+                          <div className="bar-fill bar-fill-incorrect" style={{ width: `${100 - correctPct}%` }} />
+                        </>
+                      ) : (
+                        <div className="bar-fill" style={{ width: '100%' }} />
+                      )}
                     </div>
                   </div>
                   <div className="form-squares">
@@ -131,7 +269,8 @@ export function Standings() {
 
           <div className="mobile-cards">
             {rows.map((row, i) => {
-              const barWidth = leaderPoints ? Math.max(0, (row.total_points / leaderPoints) * 100) : 0;
+              const decided = row.wins + row.losses;
+              const correctPct = decided > 0 ? (row.wins / decided) * 100 : 0;
               const rowForm = form[row.player_id] ?? [];
               return (
                 <div className={`phone-standings-card ${i === 0 ? 'phone-standings-leader' : ''}`} key={row.player_id}>
@@ -147,7 +286,14 @@ export function Standings() {
                   </div>
                   <div className="phone-standings-bottom">
                     <div className="bar-track">
-                      <div className={`bar-fill ${i === 0 ? 'bar-fill-leader' : ''}`} style={{ width: `${barWidth}%` }} />
+                      {decided > 0 ? (
+                        <>
+                          <div className="bar-fill bar-fill-correct" style={{ width: `${correctPct}%` }} />
+                          <div className="bar-fill bar-fill-incorrect" style={{ width: `${100 - correctPct}%` }} />
+                        </>
+                      ) : (
+                        <div className="bar-fill" style={{ width: '100%' }} />
+                      )}
                     </div>
                     <span className="standings-record">{record(row)}</span>
                   </div>
@@ -155,6 +301,11 @@ export function Standings() {
               );
             })}
           </div>
+          {rows.length === 0 && (
+            <p className="hint">
+              {mode === 'week' ? `No picks graded for ${selectedWeek?.label ?? 'this week'} yet.` : 'No standings yet.'}
+            </p>
+          )}
         </>
       )}
     </div>

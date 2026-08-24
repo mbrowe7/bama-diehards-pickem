@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useCurrentSeason } from '../hooks/useCurrentSeason';
 import { usePlayers } from '../hooks/usePlayers';
 import { useTeams } from '../hooks/useTeams';
+import { formatShortDayDate } from '../lib/format';
 import type { Database } from '../types/database';
 
 type Projection = Database['public']['Tables']['preseason_projections']['Row'];
@@ -28,30 +29,11 @@ export function PreseasonProjections() {
 
   const [viewingPlayerId, setViewingPlayerId] = useState<string | null>(null);
   const [rows, setRows] = useState<Projection[]>([]);
-  const [lockedAt, setLockedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const effectivePlayerId = viewingPlayerId ?? player?.id ?? null;
+  const lockedAt = season?.preseason_lock_at ?? null;
   const locked = !isAdmin && !!lockedAt && new Date(lockedAt).getTime() <= Date.now();
-
-  useEffect(() => {
-    if (!season) return;
-    let cancelled = false;
-    (async () => {
-      // Lock time = earliest game kickoff in the season (i.e. Week 0's kickoff).
-      const { data: weekRows } = await supabase.from('weeks').select('id').eq('season_id', season.id);
-      const weekIds = (weekRows ?? []).map((w) => w.id);
-      if (!weekIds.length) {
-        if (!cancelled) setLockedAt(null);
-        return;
-      }
-      const { data: gameRows } = await supabase
-        .from('games').select('kickoff_at').in('week_id', weekIds)
-        .order('kickoff_at').limit(1);
-      if (!cancelled) setLockedAt(gameRows?.[0]?.kickoff_at ?? null);
-    })();
-    return () => { cancelled = true; };
-  }, [season]);
 
   useEffect(() => {
     if (!season || !effectivePlayerId) return;
@@ -125,10 +107,11 @@ export function PreseasonProjections() {
       {locked && (
         <div className="locked-notice">
           <span className="locked-dot" />
-          Locked — Week 0 kicked off. {filledCount} of {TOTAL_SLOTS} slots filled.
+          Locked — projections closed {formatShortDayDate(lockedAt as string)}. {filledCount} of {TOTAL_SLOTS} slots filled.
         </div>
       )}
-      {!lockedAt && <p className="hint">Projections unlock for editing once the admin posts Week 0 games; you can still fill them in now.</p>}
+      {!locked && lockedAt && <p className="hint">Editable until {formatShortDayDate(lockedAt)}.</p>}
+      {!lockedAt && <p className="hint">No lock time set for this season yet; you can still fill these in.</p>}
 
       {loading ? <p>Loading...</p> : (
         <div>
