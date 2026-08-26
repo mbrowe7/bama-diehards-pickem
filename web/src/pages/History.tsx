@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { PillGroup } from '../components/PillGroup';
-import type { Database } from '../types/database';
+import type { Database, SeasonRecordCategory } from '../types/database';
 
 type Season = Database['public']['Tables']['seasons']['Row'];
 type FinalStandingsRow = Database['public']['Tables']['season_final_standings']['Row'];
@@ -19,8 +19,70 @@ type Row = {
   preseason_points: number | null;
 };
 
-function record(row: Row) {
+type CategoryRow = {
+  season_id: string;
+  player_id: string;
+  display_name: string;
+  category: SeasonRecordCategory;
+  wins: number;
+  losses: number;
+  ties: number;
+};
+
+const ALL_TIME_ID = 'all-time';
+
+const MAIN_CATEGORIES: { key: SeasonRecordCategory; label: string }[] = [
+  { key: 'overall', label: 'Overall' },
+  { key: 'regular_season', label: 'Regular Season' },
+  { key: 'bowl', label: 'Bowl' },
+  { key: 'overall_bonus', label: 'Overall Bonus' },
+  { key: 'regular_season_bonus', label: 'Reg. Season Bonus' },
+];
+
+const AWARD_CATEGORIES: { key: SeasonRecordCategory; label: string }[] = [
+  { key: 'conf_champs', label: 'Conf. Champs' },
+  { key: 'playoff_picks', label: 'Playoff Picks' },
+  { key: 'national_champion', label: "Nat'l Champion" },
+  { key: 'heisman_finalists', label: 'Heisman Finalists' },
+  { key: 'heisman_winner', label: 'Heisman Winner' },
+];
+
+function record(row: { wins: number; losses: number; ties: number }) {
   return `${row.wins}-${row.losses}${row.ties ? `-${row.ties}` : ''}`;
+}
+
+function winPct(row: { wins: number; losses: number; ties: number } | undefined) {
+  if (!row) return 0;
+  const total = row.wins + row.losses + row.ties;
+  return total ? (row.wins + row.ties * 0.5) / total : 0;
+}
+
+type PlayerCategoryRecords = {
+  player_id: string;
+  display_name: string;
+  byCategory: Map<SeasonRecordCategory, { wins: number; losses: number; ties: number }>;
+};
+
+function buildPlayerRecords(rows: CategoryRow[]): PlayerCategoryRecords[] {
+  const byPlayer = new Map<string, PlayerCategoryRecords>();
+  for (const r of rows) {
+    let entry = byPlayer.get(r.player_id);
+    if (!entry) {
+      entry = { player_id: r.player_id, display_name: r.display_name, byCategory: new Map() };
+      byPlayer.set(r.player_id, entry);
+    }
+    const existing = entry.byCategory.get(r.category);
+    if (existing) {
+      existing.wins += r.wins;
+      existing.losses += r.losses;
+      existing.ties += r.ties;
+    } else {
+      entry.byCategory.set(r.category, { wins: r.wins, losses: r.losses, ties: r.ties });
+    }
+  }
+  return [...byPlayer.values()].sort(
+    (a, b) => winPct(b.byCategory.get('overall')) - winPct(a.byCategory.get('overall')),
+  );
 }
 
 export function History() {
@@ -30,6 +92,7 @@ export function History() {
   const [rows, setRows] = useState<Row[]>([]);
   const [hasBreakdown, setHasBreakdown] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [categoryRows, setCategoryRows] = useState<CategoryRow[]>([]);
 
   useEffect(() => {
     supabase.from('seasons').select('*').order('year', { ascending: false }).then(({ data }) => {
@@ -37,10 +100,34 @@ export function History() {
       setSeasons(list);
       if (list.length) setSeasonId(list[0].id);
     });
+
+    supabase
+      .from('season_category_records')
+      .select('*, players(display_name)')
+      .then(({ data }) => {
+        const raw = (data ?? []) as (Database['public']['Tables']['season_category_records']['Row'] & {
+          players: { display_name: string } | null;
+        })[];
+        setCategoryRows(
+          raw.map((r) => ({
+            season_id: r.season_id,
+            player_id: r.player_id,
+            display_name: r.players?.display_name ?? '',
+            category: r.category,
+            wins: r.wins,
+            losses: r.losses,
+            ties: r.ties,
+          })),
+        );
+      });
   }, []);
 
   useEffect(() => {
-    if (!seasonId) return;
+    if (!seasonId || seasonId === ALL_TIME_ID) {
+      setLoading(false);
+      setRows([]);
+      return;
+    }
     setLoading(true);
     supabase
       .from('season_final_standings')
@@ -83,20 +170,31 @@ export function History() {
 
   const selectedSeason = seasons.find((s) => s.id === seasonId);
 
+  const yearPills = useMemo(
+    () => [...seasons.map((s) => ({ id: s.id, label: String(s.year) })), { id: ALL_TIME_ID, label: 'All-Time' }],
+    [seasons],
+  );
+
+  const categoryPlayers = useMemo(() => {
+    if (!seasonId) return [];
+    const rowsForSelection =
+      seasonId === ALL_TIME_ID ? categoryRows : categoryRows.filter((r) => r.season_id === seasonId);
+    return buildPlayerRecords(rowsForSelection);
+  }, [seasonId, categoryRows]);
+
+  const showCategoryTables = categoryPlayers.length > 0;
+  const showPointsTable = seasonId !== ALL_TIME_ID;
+
   return (
     <div className="page page-wide">
       <div className="page-head">
         <h1>History</h1>
-        <PillGroup
-          items={seasons.map((s) => ({ id: s.id, label: String(s.year) }))}
-          activeId={seasonId ?? ''}
-          onSelect={setSeasonId}
-        />
+        <PillGroup items={yearPills} activeId={seasonId ?? ''} onSelect={setSeasonId} maxPills={8} />
       </div>
 
-      {loading ? (
-        <p>Loading...</p>
-      ) : (
+      {showPointsTable && loading && <p>Loading...</p>}
+
+      {showPointsTable && !loading && (
         <>
           <div className="desktop-rows">
             <div className="history-grid-head">
@@ -150,7 +248,77 @@ export function History() {
           </div>
         </>
       )}
-      {!loading && rows.length === 0 && <p className="hint">No standings for {selectedSeason?.year ?? 'this season'} yet.</p>}
+      {showPointsTable && !loading && rows.length === 0 && (
+        <p className="hint">No standings for {selectedSeason?.year ?? 'this season'} yet.</p>
+      )}
+
+      {showCategoryTables && (
+        <div className="records-section">
+          <h2 className="records-section-title">
+            {seasonId === ALL_TIME_ID ? 'All-Time Record' : `${selectedSeason?.year ?? ''} Season Record`}
+          </h2>
+          <div className="table-scroll">
+            <table className="records-table">
+              <thead>
+                <tr>
+                  <th className="records-th-rank">#</th>
+                  <th className="records-th-player">Player</th>
+                  {MAIN_CATEGORIES.map((c) => (
+                    <th key={c.key}>{c.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {categoryPlayers.map((p, i) => (
+                  <tr key={p.player_id}>
+                    <td className="records-td-rank">{i + 1}</td>
+                    <td className={`records-td-player ${p.player_id === player?.id ? 'history-name-self' : ''}`}>
+                      {p.display_name}
+                    </td>
+                    {MAIN_CATEGORIES.map((c, idx) => {
+                      const rec = p.byCategory.get(c.key);
+                      return (
+                        <td key={c.key} className={idx === 0 ? 'records-td-overall' : undefined}>
+                          {rec ? record(rec) : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <h2 className="records-section-title records-section-title-spaced">Preseason Picks/Awards</h2>
+          <div className="table-scroll">
+            <table className="records-table">
+              <thead>
+                <tr>
+                  <th className="records-th-rank">#</th>
+                  <th className="records-th-player">Player</th>
+                  {AWARD_CATEGORIES.map((c) => (
+                    <th key={c.key}>{c.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {categoryPlayers.map((p, i) => (
+                  <tr key={p.player_id}>
+                    <td className="records-td-rank">{i + 1}</td>
+                    <td className={`records-td-player ${p.player_id === player?.id ? 'history-name-self' : ''}`}>
+                      {p.display_name}
+                    </td>
+                    {AWARD_CATEGORIES.map((c) => {
+                      const rec = p.byCategory.get(c.key);
+                      return <td key={c.key}>{rec ? record(rec) : '—'}</td>;
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

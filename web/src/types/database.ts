@@ -14,6 +14,9 @@ export type ProjectionCategory =
 export type ScoringRuleKey =
   | 'correct_pick' | 'correct_bonus' | 'correct_conf_champ' | 'correct_at_large'
   | 'correct_heisman_finalist' | 'correct_heisman_winner' | 'correct_national_champ';
+export type SeasonRecordCategory =
+  | 'overall' | 'regular_season' | 'bowl' | 'overall_bonus' | 'regular_season_bonus'
+  | 'conf_champs' | 'playoff_picks' | 'national_champion' | 'heisman_finalists' | 'heisman_winner';
 
 export interface Database {
   public: {
@@ -122,6 +125,18 @@ export interface Database {
           total_points: number; wins: number; losses: number; ties?: number;
         };
         Update: Partial<{ rank: number; total_points: number; wins: number; losses: number; ties: number }>;
+        Relationships: [];
+      };
+      season_category_records: {
+        Row: {
+          id: string; season_id: string; player_id: string; category: SeasonRecordCategory;
+          wins: number; losses: number; ties: number;
+        };
+        Insert: {
+          id?: string; season_id: string; player_id: string; category: SeasonRecordCategory;
+          wins: number; losses: number; ties?: number;
+        };
+        Update: Partial<{ wins: number; losses: number; ties: number }>;
         Relationships: [];
       };
     };
