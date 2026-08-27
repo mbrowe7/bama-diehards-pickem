@@ -260,6 +260,10 @@ a { color: inherit; }
 
 .page.page-wide { max-width: 820px; }
 
+/* Everyone's-picks view stretches to the app's full content width so the
+   grid fits without a horizontal scrollbar on desktop. */
+.page.page-full { max-width: 1180px; }
+
 .page-with-phone {
   max-width: 1180px;
   margin: 0 auto;
@@ -595,6 +599,22 @@ a { color: inherit; }
   color: var(--dim);
 }
 .picks-grid-bonus .picks-grid-cell { text-align: left; white-space: normal; }
+
+/* Full-width view: on a roomy viewport, fill the row and wrap long names
+   instead of scrolling. Narrower than this the grid keeps its scrollbar. */
+@media (min-width: 900px) {
+  .page-full .table-scroll { overflow-x: visible; }
+  .page-full .picks-grid { min-width: 0; table-layout: fixed; }
+  .page-full .picks-grid th,
+  .page-full .picks-grid td {
+    white-space: normal;
+    overflow-wrap: break-word;
+    padding: 7px 6px;
+  }
+  .page-full .picks-grid-corner,
+  .page-full .picks-grid-matchup { width: 190px; position: static; }
+  .page-full .picks-grid-arrow { margin-right: 2px; }
+}
 
 /* ---------- Mobile card layouts ---------- */
 /* Below ~640px the page becomes the phone layout: desktop rows swap for

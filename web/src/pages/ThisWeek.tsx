@@ -269,7 +269,7 @@ export function ThisWeek() {
   if (!season) return <p>Loading...</p>;
 
   return (
-    <div className="page">
+    <div className={`page ${view === 'everyone' ? 'page-full' : ''}`}>
         <div className="page-head">
           <div className="page-head-left">
             <h1>{selectedWeek?.label ?? 'This Week'}</h1>
