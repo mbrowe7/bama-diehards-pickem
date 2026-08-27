@@ -494,6 +494,108 @@ a { color: inherit; }
   flex-shrink: 0;
 }
 
+/* ---------- This Week: everyone's picks ---------- */
+
+.everyone-flag {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--accent-fill);
+}
+
+.everyone-flag.everyone-flag-clear { background: var(--surf-2); }
+
+.everyone-flag-label {
+  font: 500 10.5px/1 var(--font-ui);
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+}
+
+.everyone-flag-clear .everyone-flag-label { color: var(--dim); }
+
+.everyone-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surf);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.everyone-chip-count { font: 400 10px/1 var(--font-mono); color: var(--faint); }
+
+.picks-grid {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 560px;
+}
+
+.picks-grid th,
+.picks-grid td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  text-align: center;
+}
+
+.picks-grid tr:last-child td { border-bottom: none; }
+
+.picks-grid th {
+  font: 500 10px/1.1 var(--font-ui);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.picks-grid th.picks-grid-th-missing { color: var(--accent-ink); }
+
+.picks-grid-corner,
+.picks-grid-matchup {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: var(--surf);
+  z-index: 1;
+}
+
+.picks-grid-matchup {
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.picks-grid-matchup .mono { font: 400 11px/1 var(--font-mono); color: var(--dim); }
+.picks-grid-matchup .at { color: var(--faint); }
+
+.picks-grid-cell { font-size: 12px; color: var(--dim); }
+
+.picks-grid-arrow { color: var(--faint); margin-right: 4px; font-size: 10px; }
+.picks-grid-team { color: var(--ink); }
+.picks-grid-empty { color: var(--faint); }
+
+.picks-grid-covered { background: var(--covered-fill); }
+.picks-grid-covered .picks-grid-team,
+.picks-grid-covered .picks-grid-arrow { color: var(--covered-text); }
+
+.picks-grid-missed { background: var(--missed-fill); }
+.picks-grid-missed .picks-grid-team,
+.picks-grid-missed .picks-grid-arrow { color: var(--missed-text); }
+
+.picks-grid-bonus td { border-top: 1px solid var(--line); }
+.picks-grid-bonus .picks-grid-matchup {
+  font: 500 10.5px/1 var(--font-ui);
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.picks-grid-bonus .picks-grid-cell { text-align: left; white-space: normal; }
+
 /* ---------- Mobile card layouts ---------- */
 /* Below ~640px the page becomes the phone layout: desktop rows swap for
    card lists. Both are always in the DOM; the media query picks one. */
@@ -937,6 +1039,15 @@ a { color: inherit; }
   margin-top: 12px;
 }
 .add-game-row2 .field-group { flex: 1; }
+
+.build-edit-panel { margin-bottom: 10px; }
+
+.build-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
 
 .field-group {
   display: flex;

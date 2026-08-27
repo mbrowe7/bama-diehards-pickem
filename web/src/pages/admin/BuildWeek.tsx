@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useCurrentSeason } from '../../hooks/useCurrentSeason';
 import { useTeams } from '../../hooks/useTeams';
@@ -17,6 +17,93 @@ interface GameRow {
   underdog_team: Team;
 }
 
+interface GameDraft {
+  favoriteId: string;
+  underdogId: string;
+  spread: string;
+  kickoff: string;
+  neutralSite: string;
+}
+
+const EMPTY_DRAFT: GameDraft = { favoriteId: '', underdogId: '', spread: '', kickoff: '', neutralSite: '' };
+
+// <input type="datetime-local"> wants a local-time "YYYY-MM-DDTHH:mm" string.
+function toDatetimeLocal(iso: string) {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function validateDraft(d: GameDraft): string | null {
+  if (!d.favoriteId || !d.underdogId || !d.spread || !d.kickoff) {
+    return 'Fill in favorite, underdog, spread, and kickoff time.';
+  }
+  if (d.favoriteId === d.underdogId) return 'Favorite and underdog must be different teams.';
+  return null;
+}
+
+function draftToRow(d: GameDraft) {
+  return {
+    favorite_team_id: d.favoriteId,
+    underdog_team_id: d.underdogId,
+    spread: Number(d.spread),
+    kickoff_at: new Date(d.kickoff).toISOString(),
+    neutral_site: d.neutralSite.trim() || null,
+  };
+}
+
+function GameFields({ draft, teams, onChange, trailing }: {
+  draft: GameDraft;
+  teams: Team[];
+  onChange: (next: GameDraft) => void;
+  trailing: ReactNode;
+}) {
+  return (
+    <>
+      <div className="add-game-grid">
+        <label className="field-group">
+          Favorite
+          <select value={draft.favoriteId} onChange={(e) => onChange({ ...draft, favoriteId: e.target.value })}>
+            <option value="">Choose…</option>
+            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </label>
+        <label className="field-group">
+          Underdog
+          <select value={draft.underdogId} onChange={(e) => onChange({ ...draft, underdogId: e.target.value })}>
+            <option value="">Choose…</option>
+            {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </label>
+        <label className="field-group">
+          Spread
+          <input
+            className="mono" type="number" step="0.5" min="0"
+            value={draft.spread} onChange={(e) => onChange({ ...draft, spread: e.target.value })}
+          />
+        </label>
+        <label className="field-group">
+          Kickoff
+          <input
+            className="mono" type="datetime-local"
+            value={draft.kickoff} onChange={(e) => onChange({ ...draft, kickoff: e.target.value })}
+          />
+        </label>
+      </div>
+      <div className="add-game-row2">
+        <label className="field-group">
+          Neutral site (optional)
+          <input
+            type="text"
+            value={draft.neutralSite} onChange={(e) => onChange({ ...draft, neutralSite: e.target.value })}
+          />
+        </label>
+        {trailing}
+      </div>
+    </>
+  );
+}
+
 export function BuildWeek() {
   const { season, loading: seasonLoading } = useCurrentSeason();
   const teams = useTeams();
@@ -29,13 +116,14 @@ export function BuildWeek() {
   const [newWeekLabel, setNewWeekLabel] = useState('');
   const [newWeekSort, setNewWeekSort] = useState('');
 
-  const [favoriteId, setFavoriteId] = useState('');
-  const [underdogId, setUnderdogId] = useState('');
-  const [spread, setSpread] = useState('');
-  const [kickoff, setKickoff] = useState('');
-  const [neutralSite, setNeutralSite] = useState('');
+  const [addDraft, setAddDraft] = useState<GameDraft>(EMPTY_DRAFT);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<GameDraft>(EMPTY_DRAFT);
+  const [editError, setEditError] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
 
   async function loadWeeks() {
     if (!season) return;
@@ -66,7 +154,11 @@ export function BuildWeek() {
     }
   }
 
-  useEffect(() => { loadGames(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [selectedWeekId]);
+  useEffect(() => {
+    setEditingId(null);
+    loadGames();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [selectedWeekId]);
 
   async function createWeek(e: FormEvent) {
     e.preventDefault();
@@ -88,34 +180,52 @@ export function BuildWeek() {
   async function createGame(e: FormEvent) {
     e.preventDefault();
     setFormError('');
-    if (!selectedWeekId || !favoriteId || !underdogId || !spread || !kickoff) {
-      setFormError('Fill in favorite, underdog, spread, and kickoff time.');
-      return;
-    }
-    if (favoriteId === underdogId) {
-      setFormError('Favorite and underdog must be different teams.');
-      return;
-    }
+    if (!selectedWeekId) return;
+    const problem = validateDraft(addDraft);
+    if (problem) { setFormError(problem); return; }
     setSaving(true);
     const { error } = await supabase.from('games').insert({
       week_id: selectedWeekId,
-      favorite_team_id: favoriteId,
-      underdog_team_id: underdogId,
-      spread: Number(spread),
-      kickoff_at: new Date(kickoff).toISOString(),
-      neutral_site: neutralSite.trim() || null,
+      ...draftToRow(addDraft),
     });
     setSaving(false);
     if (error) {
       setFormError(error.message);
       return;
     }
-    setFavoriteId(''); setUnderdogId(''); setSpread(''); setKickoff(''); setNeutralSite('');
+    setAddDraft(EMPTY_DRAFT);
+    loadGames();
+  }
+
+  function startEdit(g: GameRow) {
+    setEditError('');
+    setEditingId(g.id);
+    setEditDraft({
+      favoriteId: g.favorite_team.id,
+      underdogId: g.underdog_team.id,
+      spread: String(g.spread),
+      kickoff: toDatetimeLocal(g.kickoff_at),
+      neutralSite: g.neutral_site ?? '',
+    });
+  }
+
+  async function saveEdit(e: FormEvent) {
+    e.preventDefault();
+    if (!editingId) return;
+    setEditError('');
+    const problem = validateDraft(editDraft);
+    if (problem) { setEditError(problem); return; }
+    setEditSaving(true);
+    const { error } = await supabase.from('games').update(draftToRow(editDraft)).eq('id', editingId);
+    setEditSaving(false);
+    if (error) { setEditError(error.message); return; }
+    setEditingId(null);
     loadGames();
   }
 
   async function deleteGame(id: string) {
     await supabase.from('games').delete().eq('id', id);
+    if (editingId === id) setEditingId(null);
     loadGames();
   }
 
@@ -158,16 +268,35 @@ export function BuildWeek() {
         <>
           <div style={{ marginBottom: 28 }}>
             {games.map((g) => (
-              <div className="build-row" key={g.id}>
-                <span className="build-when">{formatShortDayDate(g.kickoff_at)}</span>
-                <span className="build-matchup">
-                  {g.underdog_team.name} <span className="mono">{spreadText(g.spread, false)}</span>{' '}
-                  <span className="at">at</span>{' '}
-                  {g.favorite_team.name} <span className="mono">{spreadText(g.spread, true)}</span>
-                </span>
-                <span className="build-site">{g.neutral_site ?? ''}</span>
-                <button type="button" className="build-remove-btn" onClick={() => deleteGame(g.id)}>Remove</button>
-              </div>
+              editingId === g.id ? (
+                <form className="add-game-panel build-edit-panel" key={g.id} onSubmit={saveEdit}>
+                  <div className="add-game-label">Edit game</div>
+                  <GameFields
+                    draft={editDraft}
+                    teams={teams}
+                    onChange={setEditDraft}
+                    trailing={
+                      <div className="build-edit-actions">
+                        <button type="button" className="link-button" onClick={() => setEditingId(null)}>Cancel</button>
+                        <button type="submit" disabled={editSaving}>{editSaving ? 'Saving…' : 'Save game'}</button>
+                      </div>
+                    }
+                  />
+                  {editError && <p className="error-text">{editError}</p>}
+                </form>
+              ) : (
+                <div className="build-row" key={g.id}>
+                  <span className="build-when">{formatShortDayDate(g.kickoff_at)}</span>
+                  <span className="build-matchup">
+                    {g.underdog_team.name} <span className="mono">{spreadText(g.spread, false)}</span>{' '}
+                    <span className="at">at</span>{' '}
+                    {g.favorite_team.name} <span className="mono">{spreadText(g.spread, true)}</span>
+                  </span>
+                  <span className="build-site">{g.neutral_site ?? ''}</span>
+                  <button type="button" className="build-remove-btn" onClick={() => startEdit(g)}>Edit</button>
+                  <button type="button" className="build-remove-btn" onClick={() => deleteGame(g.id)}>Remove</button>
+                </div>
+              )
             ))}
             {games.length === 0 && <p className="hint">No games yet.</p>}
           </div>
@@ -175,37 +304,12 @@ export function BuildWeek() {
           <div className="add-game-panel">
             <div className="add-game-label">Add game</div>
             <form onSubmit={createGame}>
-              <div className="add-game-grid">
-                <label className="field-group">
-                  Favorite
-                  <select value={favoriteId} onChange={(e) => setFavoriteId(e.target.value)}>
-                    <option value="">Choose…</option>
-                    {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                </label>
-                <label className="field-group">
-                  Underdog
-                  <select value={underdogId} onChange={(e) => setUnderdogId(e.target.value)}>
-                    <option value="">Choose…</option>
-                    {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                </label>
-                <label className="field-group">
-                  Spread
-                  <input className="mono" type="number" step="0.5" min="0" value={spread} onChange={(e) => setSpread(e.target.value)} />
-                </label>
-                <label className="field-group">
-                  Kickoff
-                  <input className="mono" type="datetime-local" value={kickoff} onChange={(e) => setKickoff(e.target.value)} />
-                </label>
-              </div>
-              <div className="add-game-row2">
-                <label className="field-group">
-                  Neutral site (optional)
-                  <input type="text" value={neutralSite} onChange={(e) => setNeutralSite(e.target.value)} />
-                </label>
-                <button type="submit" disabled={saving}>{saving ? 'Adding…' : 'Add game'}</button>
-              </div>
+              <GameFields
+                draft={addDraft}
+                teams={teams}
+                onChange={setAddDraft}
+                trailing={<button type="submit" disabled={saving}>{saving ? 'Adding…' : 'Add game'}</button>}
+              />
               {formError && <p className="error-text">{formError}</p>}
             </form>
           </div>

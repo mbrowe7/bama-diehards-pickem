@@ -120,6 +120,10 @@ export function PreseasonProjections() {
               <span className="preseason-title">Conference champions</span>
               <span className="preseason-meta">{TEAM_CATEGORIES.filter((c) => byKey.get(`${c.key}:1`)?.team_id).length} of {TEAM_CATEGORIES.length}</span>
             </div>
+            <p className="hint">
+              If a team you pick here misses its conference title but still makes the
+              playoff, it scores the at-large value instead of the full conference-champ value.
+            </p>
             {TEAM_CATEGORIES.map(({ key, label }) => (
               <TeamField
                 key={key}

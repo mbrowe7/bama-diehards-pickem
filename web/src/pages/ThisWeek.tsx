@@ -7,6 +7,9 @@ import { PillGroup } from '../components/PillGroup';
 import { formatTime, formatShortDayTime, spreadText } from '../lib/format';
 import type { Database } from '../types/database';
 
+type PlayerLite = { id: string; display_name: string };
+type WeekView = 'mine' | 'everyone';
+
 type Week = Database['public']['Tables']['weeks']['Row'];
 type Team = { id: string; name: string };
 interface GameRow {
@@ -63,6 +66,12 @@ export function ThisWeek() {
   const [viewingPlayerId, setViewingPlayerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingGameId, setSavingGameId] = useState<string | null>(null);
+
+  const [view, setView] = useState<WeekView>('mine');
+  // game_id -> player_id -> team_id, plus player_id -> bonus text
+  const [allPicks, setAllPicks] = useState<Record<string, Record<string, string>>>({});
+  const [allBonus, setAllBonus] = useState<Record<string, string>>({});
+  const [everyoneLoading, setEveryoneLoading] = useState(false);
 
   const effectivePlayerId = viewingPlayerId ?? player?.id ?? null;
 
@@ -147,6 +156,37 @@ export function ThisWeek() {
   useEffect(() => {
     loadWeekData();
   }, [loadWeekData]);
+
+  // "Everyone" view: pull every player's picks + bonus for the selected week.
+  useEffect(() => {
+    if (view !== 'everyone' || !selectedWeekId) return;
+    let cancelled = false;
+    (async () => {
+      setEveryoneLoading(true);
+      const gameIds = games.map((g) => g.id);
+      const [picksRes, bonusRes] = await Promise.all([
+        gameIds.length
+          ? supabase.from('picks').select('game_id, player_id, team_id').in('game_id', gameIds)
+          : Promise.resolve({ data: [] as { game_id: string; player_id: string; team_id: string }[] }),
+        supabase
+          .from('bonus_picks')
+          .select('player_id, description, submitted_at')
+          .eq('week_id', selectedWeekId)
+          .order('submitted_at'),
+      ]);
+      if (cancelled) return;
+      const pickMap: Record<string, Record<string, string>> = {};
+      for (const p of picksRes.data ?? []) {
+        (pickMap[p.game_id] ??= {})[p.player_id] = p.team_id;
+      }
+      const bonusMap: Record<string, string> = {};
+      for (const b of bonusRes.data ?? []) bonusMap[b.player_id] = b.description; // most recent wins
+      setAllPicks(pickMap);
+      setAllBonus(bonusMap);
+      setEveryoneLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [view, selectedWeekId, games]);
 
   async function makePick(game: GameRow, teamId: string) {
     if (!effectivePlayerId || !player) return;
@@ -235,13 +275,14 @@ export function ThisWeek() {
             <h1>{selectedWeek?.label ?? 'This Week'}</h1>
             {games.length > 0 && (
               <span className="page-status">
-                {pickedCount} of {games.length} picked
-                {bonusLockKickoff && ` · locks ${formatShortDayTime(bonusLockKickoff)}`}
+                {view === 'mine' && `${pickedCount} of ${games.length} picked`}
+                {view === 'mine' && bonusLockKickoff && ' · '}
+                {bonusLockKickoff && `locks ${formatShortDayTime(bonusLockKickoff)}`}
               </span>
             )}
           </div>
           <div className="page-head-controls" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {isAdmin && (
+            {isAdmin && view === 'mine' && (
               <select
                 value={viewingPlayerId ?? player?.id ?? ''}
                 onChange={(e) => setViewingPlayerId(e.target.value)}
@@ -251,6 +292,11 @@ export function ThisWeek() {
                 ))}
               </select>
             )}
+            <PillGroup
+              items={[{ id: 'mine', label: 'Mine' }, { id: 'everyone', label: 'Everyone' }]}
+              activeId={view}
+              onSelect={(id) => setView(id as WeekView)}
+            />
             <PillGroup
               items={weeks.map((w) => ({
                 id: w.id,
@@ -267,6 +313,14 @@ export function ThisWeek() {
           <p>Loading games...</p>
         ) : games.length === 0 ? (
           <p>No games posted for {selectedWeek?.label} yet.</p>
+        ) : view === 'everyone' ? (
+          <EveryonePicks
+            games={games}
+            players={players}
+            allPicks={allPicks}
+            allBonus={allBonus}
+            loading={everyoneLoading}
+          />
         ) : (
           <>
             <div className="desktop-rows">
@@ -418,6 +472,106 @@ export function ThisWeek() {
             </div>
           </>
         )}
+    </div>
+  );
+}
+
+function EveryonePicks({ games, players, allPicks, allBonus, loading }: {
+  games: GameRow[];
+  players: PlayerLite[];
+  allPicks: Record<string, Record<string, string>>;
+  allBonus: Record<string, string>;
+  loading: boolean;
+}) {
+  const pickedCount = (playerId: string) => games.filter((g) => allPicks[g.id]?.[playerId]).length;
+  const incomplete = players.filter((p) => pickedCount(p.id) < games.length);
+
+  if (loading) return <p>Loading picks…</p>;
+
+  return (
+    <div className="everyone">
+      <div className={`everyone-flag ${incomplete.length ? '' : 'everyone-flag-clear'}`}>
+        {incomplete.length ? (
+          <>
+            <span className="everyone-flag-label">Not in yet</span>
+            {incomplete.map((p) => (
+              <span key={p.id} className="everyone-chip">
+                {p.display_name}
+                <span className="everyone-chip-count">{pickedCount(p.id)}/{games.length}</span>
+              </span>
+            ))}
+          </>
+        ) : (
+          <span className="everyone-flag-label">Everyone's picks are in.</span>
+        )}
+      </div>
+
+      <div className="table-scroll">
+        <table className="picks-grid">
+          <thead>
+            <tr>
+              <th className="picks-grid-corner">Game</th>
+              {players.map((p) => (
+                <th key={p.id} className={pickedCount(p.id) < games.length ? 'picks-grid-th-missing' : ''}>
+                  {p.display_name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {games.map((game) => (
+              <tr key={game.id}>
+                <td className="picks-grid-matchup">
+                  {game.underdog_team.name} <span className="mono">{spreadText(game.spread, false)}</span>{' '}
+                  <span className="at">at</span>{' '}
+                  {game.favorite_team.name} <span className="mono">{spreadText(game.spread, true)}</span>
+                </td>
+                {players.map((p) => {
+                  const teamId = allPicks[game.id]?.[p.id];
+                  const side = teamId === game.favorite_team.id
+                    ? 'favorite' as const
+                    : teamId === game.underdog_team.id
+                      ? 'underdog' as const
+                      : null;
+                  const grade = side ? pickGradeClass(game, side) : null;
+                  const teamName = side === 'favorite'
+                    ? game.favorite_team.name
+                    : side === 'underdog' ? game.underdog_team.name : '';
+                  return (
+                    <td
+                      key={p.id}
+                      className={[
+                        'picks-grid-cell',
+                        grade === 'pick-covered' && 'picks-grid-covered',
+                        grade === 'pick-missed' && 'picks-grid-missed',
+                      ].filter(Boolean).join(' ')}
+                    >
+                      {side ? (
+                        <>
+                          <span className="picks-grid-arrow">{side === 'favorite' ? '▲' : '▼'}</span>
+                          <span className="picks-grid-team">{teamName}</span>
+                        </>
+                      ) : (
+                        <span className="picks-grid-empty">·</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+            <tr className="picks-grid-bonus">
+              <td className="picks-grid-matchup">Bonus</td>
+              {players.map((p) => (
+                <td key={p.id} className="picks-grid-cell">
+                  {allBonus[p.id]
+                    ? <span className="picks-grid-team">{allBonus[p.id]}</span>
+                    : <span className="picks-grid-empty">·</span>}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
