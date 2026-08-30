@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useCurrentSeason } from '../hooks/useCurrentSeason';
 import { usePlayers } from '../hooks/usePlayers';
 import { PillGroup } from '../components/PillGroup';
-import { formatTime, formatShortDayTime, spreadText } from '../lib/format';
+import { formatTime, formatShortDayTime, orderedMatchup, spreadText } from '../lib/format';
 import type { Database } from '../types/database';
 
 type PlayerLite = { id: string; display_name: string };
@@ -17,6 +17,7 @@ interface GameRow {
   week_id: string;
   spread: number;
   neutral_site: string | null;
+  home_team_id: string | null;
   kickoff_at: string;
   favorite_score: number | null;
   underdog_score: number | null;
@@ -121,7 +122,7 @@ export function ThisWeek() {
     setLoading(true);
     const { data: gameData } = await supabase
       .from('games')
-      .select('id, week_id, spread, neutral_site, kickoff_at, favorite_score, underdog_score, result, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
+      .select('id, week_id, spread, neutral_site, home_team_id, kickoff_at, favorite_score, underdog_score, result, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
       .eq('week_id', selectedWeekId)
       .order('kickoff_at');
     const gameRows = (gameData ?? []) as unknown as GameRow[];
@@ -348,7 +349,10 @@ export function ThisWeek() {
                               disabled={locked || savingGameId === game.id}
                               onClick={() => makePick(game, game.underdog_team.id)}
                             >
-                              <span className="pick-team">{game.underdog_team.name}</span>
+                              <span className="pick-team">
+                                {game.underdog_team.name}
+                                {game.home_team_id === game.underdog_team.id && <span className="pick-home-tag">home</span>}
+                              </span>
                               <span className="pick-spread">{spreadText(game.spread, false)}</span>
                             </button>
                             <button
@@ -361,7 +365,10 @@ export function ThisWeek() {
                               disabled={locked || savingGameId === game.id}
                               onClick={() => makePick(game, game.favorite_team.id)}
                             >
-                              <span className="pick-team">{game.favorite_team.name}</span>
+                              <span className="pick-team">
+                                {game.favorite_team.name}
+                                {game.home_team_id === game.favorite_team.id && <span className="pick-home-tag">home</span>}
+                              </span>
                               <span className="pick-spread">{spreadText(game.spread, true)}</span>
                             </button>
                           </div>
@@ -440,7 +447,10 @@ export function ThisWeek() {
                         disabled={savingGameId === game.id}
                         onClick={() => makePick(game, game.underdog_team.id)}
                       >
-                        <span className="phone-team">{game.underdog_team.name}</span>
+                        <span className="phone-team">
+                          {game.underdog_team.name}
+                          {game.home_team_id === game.underdog_team.id && <span className="pick-home-tag">home</span>}
+                        </span>
                         <span className="phone-spread">{spreadText(game.spread, false)}</span>
                       </button>
                       <button
@@ -449,7 +459,10 @@ export function ThisWeek() {
                         disabled={savingGameId === game.id}
                         onClick={() => makePick(game, game.favorite_team.id)}
                       >
-                        <span className="phone-team">{game.favorite_team.name}</span>
+                        <span className="phone-team">
+                          {game.favorite_team.name}
+                          {game.home_team_id === game.favorite_team.id && <span className="pick-home-tag">home</span>}
+                        </span>
                         <span className="phone-spread">{spreadText(game.spread, true)}</span>
                       </button>
                     </div>
@@ -522,9 +535,16 @@ function EveryonePicks({ games, players, allPicks, allBonus, loading }: {
             {games.map((game) => (
               <tr key={game.id}>
                 <td className="picks-grid-matchup">
-                  {game.underdog_team.name} <span className="mono">{spreadText(game.spread, false)}</span>{' '}
-                  <span className="at">at</span>{' '}
-                  {game.favorite_team.name} <span className="mono">{spreadText(game.spread, true)}</span>
+                  {(() => {
+                    const { sides, neutral } = orderedMatchup(game);
+                    return (
+                      <>
+                        {sides[0].team.name} <span className="mono">{spreadText(game.spread, sides[0].isFavorite)}</span>{' '}
+                        <span className="at">{neutral ? 'vs' : 'at'}</span>{' '}
+                        {sides[1].team.name} <span className="mono">{spreadText(game.spread, sides[1].isFavorite)}</span>
+                      </>
+                    );
+                  })()}
                 </td>
                 {players.map((p) => {
                   const teamId = allPicks[game.id]?.[p.id];

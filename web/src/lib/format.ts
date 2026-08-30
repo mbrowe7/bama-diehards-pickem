@@ -23,3 +23,21 @@ export function formatShortDayTime(iso: string) {
 export function spreadText(spread: number, negative: boolean) {
   return `${negative ? '−' : '+'}${spread}`;
 }
+
+type MatchupTeam = { id: string; name: string };
+type MatchupGame = {
+  home_team_id: string | null;
+  favorite_team: MatchupTeam;
+  underdog_team: MatchupTeam;
+};
+
+// Away team first, home team second. Neutral-site games and the common
+// "favorite is home" case keep the existing underdog→favorite order; only an
+// underdog-hosted game flips it. `isFavorite` drives the spread sign, which
+// stays with the team regardless of position.
+export function orderedMatchup(g: MatchupGame) {
+  const fav = { team: g.favorite_team, isFavorite: true };
+  const dog = { team: g.underdog_team, isFavorite: false };
+  const sides = g.home_team_id === g.underdog_team.id ? [fav, dog] : [dog, fav];
+  return { sides, neutral: g.home_team_id == null };
+}

@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { useCurrentSeason } from '../../hooks/useCurrentSeason';
 import { useTeams } from '../../hooks/useTeams';
 import { PillGroup } from '../../components/PillGroup';
-import { formatShortDayDate, spreadText } from '../../lib/format';
+import { formatShortDayDate, orderedMatchup, spreadText } from '../../lib/format';
 import type { Database } from '../../types/database';
 
 type Week = Database['public']['Tables']['weeks']['Row'];
@@ -12,20 +12,26 @@ interface GameRow {
   id: string;
   spread: number;
   neutral_site: string | null;
+  home_team_id: string | null;
   kickoff_at: string;
   favorite_team: Team;
   underdog_team: Team;
 }
+
+type HomeChoice = 'favorite' | 'underdog' | 'neutral';
 
 interface GameDraft {
   favoriteId: string;
   underdogId: string;
   spread: string;
   kickoff: string;
+  home: HomeChoice;
   neutralSite: string;
 }
 
-const EMPTY_DRAFT: GameDraft = { favoriteId: '', underdogId: '', spread: '', kickoff: '', neutralSite: '' };
+const EMPTY_DRAFT: GameDraft = {
+  favoriteId: '', underdogId: '', spread: '', kickoff: '', home: 'favorite', neutralSite: '',
+};
 
 // <input type="datetime-local"> wants a local-time "YYYY-MM-DDTHH:mm" string.
 function toDatetimeLocal(iso: string) {
@@ -43,12 +49,14 @@ function validateDraft(d: GameDraft): string | null {
 }
 
 function draftToRow(d: GameDraft) {
+  const neutral = d.home === 'neutral';
   return {
     favorite_team_id: d.favoriteId,
     underdog_team_id: d.underdogId,
+    home_team_id: d.home === 'favorite' ? d.favoriteId : d.home === 'underdog' ? d.underdogId : null,
     spread: Number(d.spread),
     kickoff_at: new Date(d.kickoff).toISOString(),
-    neutral_site: d.neutralSite.trim() || null,
+    neutral_site: neutral ? (d.neutralSite.trim() || null) : null,
   };
 }
 
@@ -92,12 +100,22 @@ function GameFields({ draft, teams, onChange, trailing }: {
       </div>
       <div className="add-game-row2">
         <label className="field-group">
-          Neutral site (optional)
-          <input
-            type="text"
-            value={draft.neutralSite} onChange={(e) => onChange({ ...draft, neutralSite: e.target.value })}
-          />
+          Home team
+          <select value={draft.home} onChange={(e) => onChange({ ...draft, home: e.target.value as HomeChoice })}>
+            <option value="favorite">Favorite</option>
+            <option value="underdog">Underdog</option>
+            <option value="neutral">Neutral site</option>
+          </select>
         </label>
+        {draft.home === 'neutral' && (
+          <label className="field-group">
+            Neutral site (optional)
+            <input
+              type="text"
+              value={draft.neutralSite} onChange={(e) => onChange({ ...draft, neutralSite: e.target.value })}
+            />
+          </label>
+        )}
         {trailing}
       </div>
     </>
@@ -138,7 +156,7 @@ export function BuildWeek() {
     if (!selectedWeekId) { setGames([]); setPickedPlayerCount(0); return; }
     const { data } = await supabase
       .from('games')
-      .select('id, spread, neutral_site, kickoff_at, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
+      .select('id, spread, neutral_site, home_team_id, kickoff_at, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
       .eq('week_id', selectedWeekId)
       .order('kickoff_at');
     const rows = (data ?? []) as unknown as GameRow[];
@@ -205,6 +223,7 @@ export function BuildWeek() {
       underdogId: g.underdog_team.id,
       spread: String(g.spread),
       kickoff: toDatetimeLocal(g.kickoff_at),
+      home: g.home_team_id === g.underdog_team.id ? 'underdog' : g.home_team_id ? 'favorite' : 'neutral',
       neutralSite: g.neutral_site ?? '',
     });
   }
@@ -288,9 +307,16 @@ export function BuildWeek() {
                 <div className="build-row" key={g.id}>
                   <span className="build-when">{formatShortDayDate(g.kickoff_at)}</span>
                   <span className="build-matchup">
-                    {g.underdog_team.name} <span className="mono">{spreadText(g.spread, false)}</span>{' '}
-                    <span className="at">at</span>{' '}
-                    {g.favorite_team.name} <span className="mono">{spreadText(g.spread, true)}</span>
+                    {(() => {
+                      const { sides, neutral } = orderedMatchup(g);
+                      return (
+                        <>
+                          {sides[0].team.name} <span className="mono">{spreadText(g.spread, sides[0].isFavorite)}</span>{' '}
+                          <span className="at">{neutral ? 'vs' : 'at'}</span>{' '}
+                          {sides[1].team.name} <span className="mono">{spreadText(g.spread, sides[1].isFavorite)}</span>
+                        </>
+                      );
+                    })()}
                   </span>
                   <span className="build-site">{g.neutral_site ?? ''}</span>
                   <button type="button" className="build-remove-btn" onClick={() => startEdit(g)}>Edit</button>

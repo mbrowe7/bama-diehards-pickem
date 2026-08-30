@@ -423,6 +423,16 @@ a { color: inherit; }
 .pick-btn .pick-team { font-size: 14px; font-weight: 400; }
 .pick-btn .pick-spread { font: 400 12px/1 var(--font-mono); color: var(--dim); }
 
+.pick-home-tag {
+  margin-left: 5px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  vertical-align: 1px;
+}
+
 .pick-btn.pick-selected .pick-team { font-weight: 500; }
 
 .pick-btn.pick-selected.pick-pending {

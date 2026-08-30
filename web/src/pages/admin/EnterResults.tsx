@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useCurrentSeason } from '../../hooks/useCurrentSeason';
 import { PillGroup } from '../../components/PillGroup';
-import { spreadText } from '../../lib/format';
+import { orderedMatchup, spreadText } from '../../lib/format';
 import type { Database } from '../../types/database';
 
 type Week = Database['public']['Tables']['weeks']['Row'];
@@ -10,6 +10,7 @@ type Team = { id: string; name: string };
 interface GameRow {
   id: string;
   spread: number;
+  home_team_id: string | null;
   favorite_score: number | null;
   underdog_score: number | null;
   result: string | null;
@@ -46,7 +47,7 @@ export function EnterResults() {
     if (!selectedWeekId) { setGames([]); return; }
     const { data } = await supabase
       .from('games')
-      .select('id, spread, favorite_score, underdog_score, result, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
+      .select('id, spread, home_team_id, favorite_score, underdog_score, result, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
       .eq('week_id', selectedWeekId)
       .order('kickoff_at');
     const rows = (data ?? []) as unknown as GameRow[];
@@ -105,8 +106,16 @@ export function EnterResults() {
         return (
           <div className="results-grid-row" key={g.id}>
             <span className="results-matchup-cell">
-              {g.underdog_team.name} <span className="mono">{spreadText(g.spread, false)}</span>{' '}
-              <span className="at">at</span> {g.favorite_team.name}
+              {(() => {
+                const { sides, neutral } = orderedMatchup(g);
+                return (
+                  <>
+                    {sides[0].team.name} <span className="mono">{spreadText(g.spread, sides[0].isFavorite)}</span>{' '}
+                    <span className="at">{neutral ? 'vs' : 'at'}</span>{' '}
+                    {sides[1].team.name} <span className="mono">{spreadText(g.spread, sides[1].isFavorite)}</span>
+                  </>
+                );
+              })()}
             </span>
             <input
               type="number"

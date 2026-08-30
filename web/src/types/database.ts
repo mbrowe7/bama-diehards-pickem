@@ -48,16 +48,19 @@ export interface Database {
       games: {
         Row: {
           id: string; week_id: string; favorite_team_id: string; underdog_team_id: string;
+          home_team_id: string | null;
           spread: number; neutral_site: string | null; kickoff_at: string;
           favorite_score: number | null; underdog_score: number | null; result: GameResult | null;
         };
         Insert: {
           id?: string; week_id: string; favorite_team_id: string; underdog_team_id: string;
+          home_team_id?: string | null;
           spread: number; neutral_site?: string | null; kickoff_at: string;
           favorite_score?: number | null; underdog_score?: number | null;
         };
         Update: Partial<{
-          favorite_team_id: string; underdog_team_id: string; spread: number;
+          favorite_team_id: string; underdog_team_id: string; home_team_id: string | null;
+          spread: number;
           neutral_site: string | null; kickoff_at: string;
           favorite_score: number | null; underdog_score: number | null;
         }>;
