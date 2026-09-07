@@ -508,6 +508,40 @@ a { color: inherit; }
   flex-shrink: 0;
 }
 
+.bonus-grade {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.bonus-grade-btn {
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--surf);
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
+}
+
+.bonus-grade-btn.is-correct {
+  background: var(--covered-fill);
+  color: var(--covered-text);
+  border-color: var(--covered-text);
+}
+
+.bonus-grade-btn.is-wrong {
+  background: var(--missed-fill);
+  color: var(--missed-text);
+  border-color: var(--missed-text);
+}
+
+.picks-grid-bonus .bonus-grade { margin-left: 6px; vertical-align: middle; }
+
 /* ---------- This Week: everyone's picks ---------- */
 
 .everyone-flag {

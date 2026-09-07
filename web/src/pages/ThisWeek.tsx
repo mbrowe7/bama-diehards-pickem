@@ -9,6 +9,31 @@ import type { Database } from '../types/database';
 
 type PlayerLite = { id: string; display_name: string };
 type WeekView = 'mine' | 'everyone';
+type BonusEntry = { id: string; description: string; is_correct: boolean | null };
+
+// Bonus picks are free-text and rarely match a shared line, so they can't be
+// auto-graded off game results -- an admin marks each one correct/incorrect.
+function BonusGrade({ value, onChange }: {
+  value: boolean | null;
+  onChange: (next: boolean | null) => void;
+}) {
+  return (
+    <span className="bonus-grade">
+      <button
+        type="button"
+        className={`bonus-grade-btn ${value === true ? 'is-correct' : ''}`}
+        onClick={() => onChange(value === true ? null : true)}
+        title="Correct"
+      >✓</button>
+      <button
+        type="button"
+        className={`bonus-grade-btn ${value === false ? 'is-wrong' : ''}`}
+        onClick={() => onChange(value === false ? null : false)}
+        title="Incorrect"
+      >✗</button>
+    </span>
+  );
+}
 
 type Week = Database['public']['Tables']['weeks']['Row'];
 type Team = { id: string; name: string };
@@ -71,7 +96,7 @@ export function ThisWeek() {
   const [view, setView] = useState<WeekView>('mine');
   // game_id -> player_id -> team_id, plus player_id -> bonus text
   const [allPicks, setAllPicks] = useState<Record<string, Record<string, string>>>({});
-  const [allBonus, setAllBonus] = useState<Record<string, string>>({});
+  const [allBonus, setAllBonus] = useState<Record<string, BonusEntry>>({});
   const [everyoneLoading, setEveryoneLoading] = useState(false);
 
   const effectivePlayerId = viewingPlayerId ?? player?.id ?? null;
@@ -171,7 +196,7 @@ export function ThisWeek() {
           : Promise.resolve({ data: [] as { game_id: string; player_id: string; team_id: string }[] }),
         supabase
           .from('bonus_picks')
-          .select('player_id, description, submitted_at')
+          .select('id, player_id, description, submitted_at, is_correct')
           .eq('week_id', selectedWeekId)
           .order('submitted_at'),
       ]);
@@ -180,8 +205,10 @@ export function ThisWeek() {
       for (const p of picksRes.data ?? []) {
         (pickMap[p.game_id] ??= {})[p.player_id] = p.team_id;
       }
-      const bonusMap: Record<string, string> = {};
-      for (const b of bonusRes.data ?? []) bonusMap[b.player_id] = b.description; // most recent wins
+      const bonusMap: Record<string, BonusEntry> = {};
+      for (const b of bonusRes.data ?? []) {
+        bonusMap[b.player_id] = { id: b.id, description: b.description, is_correct: b.is_correct }; // most recent wins
+      }
       setAllPicks(pickMap);
       setAllBonus(bonusMap);
       setEveryoneLoading(false);
@@ -241,6 +268,22 @@ export function ThisWeek() {
         .single();
       if (data) setBonusPick(data);
     }
+  }
+
+  async function gradeBonus(bonusId: string, isCorrect: boolean | null) {
+    const { error } = await supabase
+      .from('bonus_picks')
+      .update({ is_correct: isCorrect })
+      .eq('id', bonusId);
+    if (error) return;
+    setAllBonus((prev) => {
+      const next = { ...prev };
+      for (const [pid, entry] of Object.entries(next)) {
+        if (entry.id === bonusId) next[pid] = { ...entry, is_correct: isCorrect };
+      }
+      return next;
+    });
+    setBonusPick((prev) => (prev && prev.id === bonusId ? { ...prev, is_correct: isCorrect } : prev));
   }
 
   const selectedWeek = useMemo(() => weeks.find((w) => w.id === selectedWeekId), [weeks, selectedWeekId]);
@@ -321,6 +364,8 @@ export function ThisWeek() {
             allPicks={allPicks}
             allBonus={allBonus}
             loading={everyoneLoading}
+            isAdmin={isAdmin}
+            onGradeBonus={gradeBonus}
           />
         ) : (
           <>
@@ -393,7 +438,13 @@ export function ThisWeek() {
                   onChange={(e) => setBonusText(e.target.value)}
                   onBlur={saveBonus}
                 />
-                {bonusPick && <span className="bonus-saved">saved</span>}
+                {bonusPick && !isAdmin && <span className="bonus-saved">saved</span>}
+                {bonusPick && isAdmin && (
+                  <BonusGrade
+                    value={bonusPick.is_correct}
+                    onChange={(next) => gradeBonus(bonusPick.id, next)}
+                  />
+                )}
               </div>
             </div>
 
@@ -481,6 +532,12 @@ export function ThisWeek() {
                   onChange={(e) => setBonusText(e.target.value)}
                   onBlur={saveBonus}
                 />
+                {bonusPick && isAdmin && (
+                  <BonusGrade
+                    value={bonusPick.is_correct}
+                    onChange={(next) => gradeBonus(bonusPick.id, next)}
+                  />
+                )}
               </div>
             </div>
           </>
@@ -489,12 +546,14 @@ export function ThisWeek() {
   );
 }
 
-function EveryonePicks({ games, players, allPicks, allBonus, loading }: {
+function EveryonePicks({ games, players, allPicks, allBonus, loading, isAdmin, onGradeBonus }: {
   games: GameRow[];
   players: PlayerLite[];
   allPicks: Record<string, Record<string, string>>;
-  allBonus: Record<string, string>;
+  allBonus: Record<string, BonusEntry>;
   loading: boolean;
+  isAdmin: boolean;
+  onGradeBonus: (bonusId: string, isCorrect: boolean | null) => void;
 }) {
   const pickedCount = (playerId: string) => games.filter((g) => allPicks[g.id]?.[playerId]).length;
   const incomplete = players.filter((p) => pickedCount(p.id) < games.length);
@@ -581,13 +640,33 @@ function EveryonePicks({ games, players, allPicks, allBonus, loading }: {
             ))}
             <tr className="picks-grid-bonus">
               <td className="picks-grid-matchup">Bonus</td>
-              {players.map((p) => (
-                <td key={p.id} className="picks-grid-cell">
-                  {allBonus[p.id]
-                    ? <span className="picks-grid-team">{allBonus[p.id]}</span>
-                    : <span className="picks-grid-empty">·</span>}
-                </td>
-              ))}
+              {players.map((p) => {
+                const entry = allBonus[p.id];
+                return (
+                  <td
+                    key={p.id}
+                    className={[
+                      'picks-grid-cell',
+                      entry?.is_correct === true && 'picks-grid-covered',
+                      entry?.is_correct === false && 'picks-grid-missed',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    {entry ? (
+                      <>
+                        <span className="picks-grid-team">{entry.description}</span>
+                        {isAdmin && (
+                          <BonusGrade
+                            value={entry.is_correct}
+                            onChange={(next) => onGradeBonus(entry.id, next)}
+                          />
+                        )}
+                      </>
+                    ) : (
+                      <span className="picks-grid-empty">·</span>
+                    )}
+                  </td>
+                );
+              })}
             </tr>
           </tbody>
         </table>
