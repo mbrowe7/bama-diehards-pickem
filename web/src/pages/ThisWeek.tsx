@@ -97,6 +97,8 @@ export function ThisWeek() {
   // game_id -> player_id -> team_id, plus player_id -> bonus text
   const [allPicks, setAllPicks] = useState<Record<string, Record<string, string>>>({});
   const [allBonus, setAllBonus] = useState<Record<string, BonusEntry>>({});
+  const [weekTotals, setWeekTotals] = useState<Record<string, number>>({});
+  const [seasonTotals, setSeasonTotals] = useState<Record<string, number>>({});
   const [everyoneLoading, setEveryoneLoading] = useState(false);
 
   const effectivePlayerId = viewingPlayerId ?? player?.id ?? null;
@@ -190,7 +192,7 @@ export function ThisWeek() {
     (async () => {
       setEveryoneLoading(true);
       const gameIds = games.map((g) => g.id);
-      const [picksRes, bonusRes] = await Promise.all([
+      const [picksRes, bonusRes, weekRes, seasonRes] = await Promise.all([
         gameIds.length
           ? supabase.from('picks').select('game_id, player_id, team_id').in('game_id', gameIds)
           : Promise.resolve({ data: [] as { game_id: string; player_id: string; team_id: string }[] }),
@@ -199,8 +201,21 @@ export function ThisWeek() {
           .select('id, player_id, description, submitted_at, is_correct')
           .eq('week_id', selectedWeekId)
           .order('submitted_at'),
+        supabase
+          .from('weekly_standings')
+          .select('player_id, total_points')
+          .eq('week_id', selectedWeekId),
+        season
+          ? supabase.from('standings').select('player_id, total_points').eq('season_id', season.id)
+          : Promise.resolve({ data: [] as { player_id: string; total_points: number }[] }),
       ]);
       if (cancelled) return;
+      const weekMap: Record<string, number> = {};
+      for (const r of weekRes.data ?? []) weekMap[r.player_id] = r.total_points;
+      const seasonMap: Record<string, number> = {};
+      for (const r of seasonRes.data ?? []) seasonMap[r.player_id] = r.total_points;
+      setWeekTotals(weekMap);
+      setSeasonTotals(seasonMap);
       const pickMap: Record<string, Record<string, string>> = {};
       for (const p of picksRes.data ?? []) {
         (pickMap[p.game_id] ??= {})[p.player_id] = p.team_id;
@@ -214,7 +229,7 @@ export function ThisWeek() {
       setEveryoneLoading(false);
     })();
     return () => { cancelled = true; };
-  }, [view, selectedWeekId, games]);
+  }, [view, selectedWeekId, games, season]);
 
   async function makePick(game: GameRow, teamId: string) {
     if (!effectivePlayerId || !player) return;
@@ -363,6 +378,8 @@ export function ThisWeek() {
             players={players}
             allPicks={allPicks}
             allBonus={allBonus}
+            weekTotals={weekTotals}
+            seasonTotals={seasonTotals}
             loading={everyoneLoading}
             isAdmin={isAdmin}
             onGradeBonus={gradeBonus}
@@ -546,11 +563,13 @@ export function ThisWeek() {
   );
 }
 
-function EveryonePicks({ games, players, allPicks, allBonus, loading, isAdmin, onGradeBonus }: {
+function EveryonePicks({ games, players, allPicks, allBonus, weekTotals, seasonTotals, loading, isAdmin, onGradeBonus }: {
   games: GameRow[];
   players: PlayerLite[];
   allPicks: Record<string, Record<string, string>>;
   allBonus: Record<string, BonusEntry>;
+  weekTotals: Record<string, number>;
+  seasonTotals: Record<string, number>;
   loading: boolean;
   isAdmin: boolean;
   onGradeBonus: (bonusId: string, isCorrect: boolean | null) => void;
@@ -667,6 +686,22 @@ function EveryonePicks({ games, players, allPicks, allBonus, loading, isAdmin, o
                   </td>
                 );
               })}
+            </tr>
+            <tr className="picks-grid-total">
+              <td className="picks-grid-matchup">Week points</td>
+              {players.map((p) => (
+                <td key={p.id} className="picks-grid-cell">
+                  <span className="picks-grid-team">{weekTotals[p.id] ?? 0}</span>
+                </td>
+              ))}
+            </tr>
+            <tr className="picks-grid-total picks-grid-total-season">
+              <td className="picks-grid-matchup">Season total</td>
+              {players.map((p) => (
+                <td key={p.id} className="picks-grid-cell">
+                  <span className="picks-grid-team">{seasonTotals[p.id] ?? 0}</span>
+                </td>
+              ))}
             </tr>
           </tbody>
         </table>
