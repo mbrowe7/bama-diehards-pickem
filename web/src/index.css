@@ -884,6 +884,44 @@ a { color: inherit; }
 .phone-standings-bottom .bar-track { flex: 1; height: 3px; }
 .phone-standings-bottom .standings-record { flex-shrink: 0; }
 
+.standings-row-clickable { cursor: pointer; }
+.standings-expand-caret {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--faint);
+  transition: transform .15s ease;
+}
+.standings-expand-caret.is-open { transform: rotate(-180deg); }
+
+.week-pick-detail {
+  padding: 6px 0 12px 30px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.phone-standings-card .week-pick-detail {
+  padding: 8px 0 0;
+  border-bottom: none;
+  border-top: 1px solid var(--line);
+  margin-top: 7px;
+}
+.week-pick-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.week-pick-matchup { color: var(--dim); }
+.week-pick-matchup .mono { font: 400 11px/1 var(--font-mono); color: var(--dim); }
+.week-pick-matchup .at { color: var(--faint); }
+.week-pick-choice { flex-shrink: 0; color: var(--ink); font-weight: 500; white-space: nowrap; }
+.week-pick-choice.week-pick-win { color: var(--covered-text); }
+.week-pick-choice.week-pick-loss { color: var(--missed-text); }
+.week-pick-choice.week-pick-push { color: var(--faint); }
+
 /* ---------- History ---------- */
 
 .history-grid-head, .history-grid-row {

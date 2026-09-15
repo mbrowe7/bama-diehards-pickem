@@ -2,13 +2,25 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useCurrentSeason } from '../hooks/useCurrentSeason';
 import { PillGroup } from '../components/PillGroup';
+import { orderedMatchup, spreadText } from '../lib/format';
 import type { Database } from '../types/database';
 
 type SeasonRow = Database['public']['Views']['standings']['Row'];
 type WeekRow = Database['public']['Views']['weekly_standings']['Row'];
 type Week = Database['public']['Tables']['weeks']['Row'];
-type PickOutcome = Database['public']['Tables']['picks']['Row']['outcome'];
+type Pick = Database['public']['Tables']['picks']['Row'];
+type BonusPick = Database['public']['Tables']['bonus_picks']['Row'];
+type PickOutcome = Pick['outcome'];
 type Mode = 'season' | 'week';
+type Team = { id: string; name: string };
+type WeekGame = {
+  id: string;
+  kickoff_at: string;
+  spread: number;
+  home_team_id: string | null;
+  favorite_team: Team;
+  underdog_team: Team;
+};
 
 interface DisplayRow {
   player_id: string;
@@ -42,6 +54,53 @@ function fromSeasonRow(row: SeasonRow): DisplayRow {
   };
 }
 
+function pickOutcomeClass(outcome: PickOutcome | undefined) {
+  if (outcome === 'win') return 'week-pick-win';
+  if (outcome === 'loss') return 'week-pick-loss';
+  if (outcome === 'push') return 'week-pick-push';
+  return '';
+}
+
+function WeekPickDetail({ games, picks, bonus, loading }: {
+  games: WeekGame[];
+  picks: Record<string, Pick> | undefined;
+  bonus: BonusPick | null | undefined;
+  loading: boolean;
+}) {
+  if (loading) return <div className="week-pick-detail"><p className="hint">Loading picks...</p></div>;
+  return (
+    <div className="week-pick-detail">
+      {games.map((game) => {
+        const pick = picks?.[game.id];
+        const { sides, neutral } = orderedMatchup(game);
+        const pickedTeamName = pick
+          ? (pick.team_id === game.favorite_team.id ? game.favorite_team.name : game.underdog_team.name)
+          : null;
+        return (
+          <div className="week-pick-row" key={game.id}>
+            <span className="week-pick-matchup">
+              {sides[0].team.name} <span className="mono">{spreadText(game.spread, sides[0].isFavorite)}</span>{' '}
+              <span className="at">{neutral ? 'vs' : 'at'}</span>{' '}
+              {sides[1].team.name} <span className="mono">{spreadText(game.spread, sides[1].isFavorite)}</span>
+            </span>
+            <span className={`week-pick-choice ${pickOutcomeClass(pick?.outcome)}`}>
+              {pickedTeamName ?? '—'}
+            </span>
+          </div>
+        );
+      })}
+      {bonus && (
+        <div className="week-pick-row">
+          <span className="week-pick-matchup">Bonus: {bonus.description}</span>
+          <span className={`week-pick-choice ${bonus.is_correct === true ? 'week-pick-win' : bonus.is_correct === false ? 'week-pick-loss' : ''}`}>
+            {bonus.is_correct === true ? 'correct' : bonus.is_correct === false ? 'incorrect' : 'pending'}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function fromWeekRow(row: WeekRow): DisplayRow {
   return {
     player_id: row.player_id,
@@ -69,6 +128,12 @@ export function Standings() {
   const [weekLoading, setWeekLoading] = useState(true);
 
   const [form, setForm] = useState<Record<string, PickOutcome[]>>({});
+
+  const [weekGames, setWeekGames] = useState<WeekGame[]>([]);
+  const [expandedPlayerId, setExpandedPlayerId] = useState<string | null>(null);
+  const [expandedPicks, setExpandedPicks] = useState<Record<string, Record<string, Pick>>>({});
+  const [expandedBonus, setExpandedBonus] = useState<Record<string, BonusPick | null>>({});
+  const [expandedLoadingId, setExpandedLoadingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!season) return;
@@ -129,6 +194,46 @@ export function Standings() {
         setWeekLoading(false);
       });
   }, [selectedWeekId]);
+
+  // Reset any expanded pick detail and re-fetch that week's games whenever
+  // the selected week changes.
+  useEffect(() => {
+    setExpandedPlayerId(null);
+    setExpandedPicks({});
+    setExpandedBonus({});
+    if (!selectedWeekId) { setWeekGames([]); return; }
+    let cancelled = false;
+    supabase
+      .from('games')
+      .select('id, kickoff_at, spread, home_team_id, favorite_team:teams!favorite_team_id(id,name), underdog_team:teams!underdog_team_id(id,name)')
+      .eq('week_id', selectedWeekId)
+      .order('kickoff_at')
+      .then(({ data }) => {
+        if (cancelled) return;
+        setWeekGames((data ?? []) as unknown as WeekGame[]);
+      });
+    return () => { cancelled = true; };
+  }, [selectedWeekId]);
+
+  async function togglePlayerPicks(playerId: string) {
+    if (expandedPlayerId === playerId) {
+      setExpandedPlayerId(null);
+      return;
+    }
+    setExpandedPlayerId(playerId);
+    if (expandedPicks[playerId] || !weekGames.length || !selectedWeekId) return;
+    setExpandedLoadingId(playerId);
+    const [picksRes, bonusRes] = await Promise.all([
+      supabase.from('picks').select('*').eq('player_id', playerId).in('game_id', weekGames.map((g) => g.id)),
+      supabase.from('bonus_picks').select('*').eq('week_id', selectedWeekId).eq('player_id', playerId)
+        .order('submitted_at', { ascending: false }).limit(1).maybeSingle(),
+    ]);
+    const byGame: Record<string, Pick> = {};
+    for (const p of picksRes.data ?? []) byGame[p.game_id] = p;
+    setExpandedPicks((prev) => ({ ...prev, [playerId]: byGame }));
+    setExpandedBonus((prev) => ({ ...prev, [playerId]: bonusRes.data ?? null }));
+    setExpandedLoadingId(null);
+  }
 
   // Form squares: each player's last five graded picks (within the current
   // scope -- the whole season, or just the selected week), oldest -> newest.
@@ -234,34 +339,51 @@ export function Standings() {
               const decided = row.wins + row.losses;
               const correctPct = decided > 0 ? (row.wins / decided) * 100 : 0;
               const rowForm = form[row.player_id] ?? [];
+              const expanded = mode === 'week' && expandedPlayerId === row.player_id;
               return (
-                <div className="standings-row" key={row.player_id}>
-                  <span className="standings-rank">{i + 1}</span>
-                  <div className="standings-mid">
-                    <div className="standings-name-row">
-                      <span className="standings-name">{row.display_name}</span>
-                      <span className="standings-split">{row.split}</span>
+                <div key={row.player_id}>
+                  <div
+                    className={`standings-row ${mode === 'week' ? 'standings-row-clickable' : ''}`}
+                    onClick={mode === 'week' ? () => togglePlayerPicks(row.player_id) : undefined}
+                  >
+                    <span className="standings-rank">{i + 1}</span>
+                    <div className="standings-mid">
+                      <div className="standings-name-row">
+                        <span className="standings-name">
+                          {row.display_name}
+                          {mode === 'week' && <span className={`standings-expand-caret ${expanded ? 'is-open' : ''}`}>▾</span>}
+                        </span>
+                        <span className="standings-split">{row.split}</span>
+                      </div>
+                      <div className="bar-track">
+                        {decided > 0 ? (
+                          <>
+                            <div className="bar-fill bar-fill-correct" style={{ width: `${correctPct}%` }} />
+                            <div className="bar-fill bar-fill-incorrect" style={{ width: `${100 - correctPct}%` }} />
+                          </>
+                        ) : (
+                          <div className="bar-fill" style={{ width: '100%' }} />
+                        )}
+                      </div>
                     </div>
-                    <div className="bar-track">
-                      {decided > 0 ? (
-                        <>
-                          <div className="bar-fill bar-fill-correct" style={{ width: `${correctPct}%` }} />
-                          <div className="bar-fill bar-fill-incorrect" style={{ width: `${100 - correctPct}%` }} />
-                        </>
-                      ) : (
-                        <div className="bar-fill" style={{ width: '100%' }} />
-                      )}
+                    <div className="form-squares">
+                      {rowForm.map((outcome, idx) => (
+                        <span key={idx} className={formSquareClass(outcome)} />
+                      ))}
+                    </div>
+                    <div className="standings-points-col">
+                      <span className="standings-points">{row.total_points}</span>
+                      <span className="standings-record">{record(row)}</span>
                     </div>
                   </div>
-                  <div className="form-squares">
-                    {rowForm.map((outcome, idx) => (
-                      <span key={idx} className={formSquareClass(outcome)} />
-                    ))}
-                  </div>
-                  <div className="standings-points-col">
-                    <span className="standings-points">{row.total_points}</span>
-                    <span className="standings-record">{record(row)}</span>
-                  </div>
+                  {expanded && (
+                    <WeekPickDetail
+                      games={weekGames}
+                      picks={expandedPicks[row.player_id]}
+                      bonus={expandedBonus[row.player_id]}
+                      loading={expandedLoadingId === row.player_id}
+                    />
+                  )}
                 </div>
               );
             })}
@@ -272,11 +394,19 @@ export function Standings() {
               const decided = row.wins + row.losses;
               const correctPct = decided > 0 ? (row.wins / decided) * 100 : 0;
               const rowForm = form[row.player_id] ?? [];
+              const expanded = mode === 'week' && expandedPlayerId === row.player_id;
               return (
-                <div className={`phone-standings-card ${i === 0 ? 'phone-standings-leader' : ''}`} key={row.player_id}>
+                <div
+                  className={`phone-standings-card ${i === 0 ? 'phone-standings-leader' : ''}`}
+                  key={row.player_id}
+                  onClick={mode === 'week' ? () => togglePlayerPicks(row.player_id) : undefined}
+                >
                   <div className="phone-standings-top">
                     <span className="standings-rank">{i + 1}</span>
-                    <span className="standings-name">{row.display_name}</span>
+                    <span className="standings-name">
+                      {row.display_name}
+                      {mode === 'week' && <span className={`standings-expand-caret ${expanded ? 'is-open' : ''}`}>▾</span>}
+                    </span>
                     <div className="form-squares">
                       {rowForm.map((outcome, idx) => (
                         <span key={idx} className={formSquareClass(outcome)} />
@@ -297,6 +427,14 @@ export function Standings() {
                     </div>
                     <span className="standings-record">{record(row)}</span>
                   </div>
+                  {expanded && (
+                    <WeekPickDetail
+                      games={weekGames}
+                      picks={expandedPicks[row.player_id]}
+                      bonus={expandedBonus[row.player_id]}
+                      loading={expandedLoadingId === row.player_id}
+                    />
+                  )}
                 </div>
               );
             })}
